@@ -1,0 +1,19 @@
+{
+  "name": "nodejs-wss-tunnel",
+  "description": "A self-hosted HTTP reverse tunnel built on WebSocket with a compact binary protocol. Expose Stable Diffusion, Ollama, ComfyUI or any local service to the internet. Features backpressure management, HMAC-SHA256 admin endpoints, and one-command client deployment.",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prod": "NODE_ENV=production node src/index.js",
+    "dev": "NODE_ENV=development node src/index.js",
+    "test": "NODE_ENV=test node --test test/*.test.js"
+  },
+  "packageManager": "yarn@4.17.1",
+  "dependencies": {
+    "ws": "^8.21.1"
+  },
+  "devDependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

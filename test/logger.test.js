@@ -1,13 +1,13 @@
-import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { serverConfig } from '../src/config.js';
+import { afterEach, beforeEach, describe, it } from 'node:test';
 
-const { logStandard, logVerbose, getConfig, setConfig } = await import('../src/logger.js');
+const { logStandard, logVerbose, logError, getConfig, setConfig } = await import('../src/logging.js');
+
+const CATS = ['ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth', 'tcp', 'client', 'agent', 'shutdown'];
 
 describe('getConfig', () => {
   beforeEach(() => {
-    serverConfig.verbose = false;
-    serverConfig.logFormat = 'text';
+    setConfig({ verbose: false, logFormat: 'text' });
   });
 
   it('returns default config', () => {
@@ -17,61 +17,60 @@ describe('getConfig', () => {
     assert.ok(['json', 'text'].includes(config.logFormat));
   });
 
-  it('returns a copy, not the original object', () => {
+  it('returns a copy, not the internal state', () => {
     const config = getConfig();
     config.verbose = true;
-    assert.equal(serverConfig.verbose, false);
+    assert.equal(getConfig().verbose, false);
   });
 });
 
 describe('setConfig', () => {
   beforeEach(() => {
-    serverConfig.verbose = false;
-    serverConfig.logFormat = 'text';
+    setConfig({ verbose: false, logFormat: 'text' });
   });
 
   it('sets verbose to true', () => {
     setConfig({ verbose: true });
-    assert.equal(serverConfig.verbose, true);
+    assert.equal(getConfig().verbose, true);
   });
 
   it('sets verbose to false', () => {
-    serverConfig.verbose = true;
+    setConfig({ verbose: true });
     setConfig({ verbose: false });
-    assert.equal(serverConfig.verbose, false);
+    assert.equal(getConfig().verbose, false);
   });
 
   it('sets logFormat to json', () => {
     setConfig({ logFormat: 'json' });
-    assert.equal(serverConfig.logFormat, 'json');
+    assert.equal(getConfig().logFormat, 'json');
   });
 
   it('sets logFormat to text', () => {
-    serverConfig.logFormat = 'json';
+    setConfig({ logFormat: 'json' });
     setConfig({ logFormat: 'text' });
-    assert.equal(serverConfig.logFormat, 'text');
+    assert.equal(getConfig().logFormat, 'text');
   });
 
   it('rejects invalid logFormat', () => {
     setConfig({ logFormat: 'xml' });
-    assert.equal(serverConfig.logFormat, 'text');
+    assert.equal(getConfig().logFormat, 'text');
   });
 
   it('ignores non-boolean verbose', () => {
     setConfig({ verbose: 'yes' });
-    assert.equal(serverConfig.verbose, false);
+    assert.equal(getConfig().verbose, false);
   });
 
   it('ignores non-string logFormat', () => {
     setConfig({ logFormat: 123 });
-    assert.equal(serverConfig.logFormat, 'text');
+    assert.equal(getConfig().logFormat, 'text');
   });
 
   it('applies partial patches', () => {
     setConfig({ verbose: true });
     setConfig({ logFormat: 'json' });
-    assert.equal(serverConfig.verbose, true);
-    assert.equal(serverConfig.logFormat, 'json');
+    assert.equal(getConfig().verbose, true);
+    assert.equal(getConfig().logFormat, 'json');
   });
 });
 
@@ -83,8 +82,7 @@ describe('logStandard', () => {
   });
 
   it('accepts all valid categories', () => {
-    const cats = ['ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth'];
-    for (const cat of cats) {
+    for (const cat of CATS) {
       assert.doesNotThrow(() => logStandard(cat, 'event', {}));
     }
   });
@@ -98,7 +96,7 @@ describe('logStandard', () => {
 
 describe('logVerbose', () => {
   beforeEach(() => {
-    serverConfig.verbose = false;
+    setConfig({ verbose: false, logFormat: 'text' });
   });
 
   it('does not throw when verbose is off', () => {
@@ -108,27 +106,92 @@ describe('logVerbose', () => {
   });
 
   it('does not throw when verbose is on', () => {
-    serverConfig.verbose = true;
+    setConfig({ verbose: true });
     assert.doesNotThrow(() => {
       logVerbose('ws', 'test', { key: 'value' });
     });
-    serverConfig.verbose = false;
   });
 
   it('respects verbose flag', () => {
     let logged = false;
     const originalLog = console.log;
-    console.log = () => { logged = true; };
+    console.log = () => {
+      logged = true;
+    };
 
-    serverConfig.verbose = false;
+    setConfig({ verbose: false });
     logVerbose('ws', 'test', {});
     assert.equal(logged, false);
 
-    serverConfig.verbose = true;
+    setConfig({ verbose: true });
     logVerbose('ws', 'test', {});
     assert.equal(logged, true);
 
     console.log = originalLog;
-    serverConfig.verbose = false;
+  });
+});
+
+describe('logError', () => {
+  it('does not throw', () => {
+    assert.doesNotThrow(() => {
+      logError('tcp', 'test_error', { message: 'boom' });
+    });
+  });
+
+  it('accepts all valid categories', () => {
+    for (const cat of CATS) {
+      assert.doesNotThrow(() => logError(cat, 'event', {}));
+    }
+  });
+});
+
+describe('env fallback (dotenv may load after this module)', () => {
+  afterEach(() => {
+    delete process.env.VERBOSE;
+    delete process.env.LOG_FORMAT;
+    setConfig({ verbose: null, logFormat: null });
+  });
+
+  it('reads VERBOSE=true from process.env at emit time', () => {
+    setConfig({ verbose: null });
+    process.env.VERBOSE = 'true';
+    let logged = false;
+    const originalLog = console.log;
+    console.log = () => {
+      logged = true;
+    };
+    try {
+      logVerbose('ws', 'test', {});
+    } finally {
+      console.log = originalLog;
+    }
+    assert.equal(logged, true);
+  });
+
+  it('reads LOG_FORMAT=json from process.env at emit time', () => {
+    setConfig({ logFormat: null });
+    process.env.LOG_FORMAT = 'json';
+    let captured = null;
+    const originalLog = console.log;
+    console.log = (line) => {
+      captured = line;
+    };
+    try {
+      logStandard('ws', 'hello', { a: 1 });
+    } finally {
+      console.log = originalLog;
+    }
+    assert.ok(captured, 'expected a log line');
+    const parsed = JSON.parse(captured);
+    assert.equal(parsed.evt, 'hello');
+    assert.equal(parsed.a, 1);
+  });
+
+  it('getConfig reflects process.env when no override is set', () => {
+    setConfig({ verbose: null, logFormat: null });
+    process.env.VERBOSE = 'true';
+    process.env.LOG_FORMAT = 'json';
+    assert.equal(getConfig().verbose, true);
+    assert.equal(getConfig().logFormat, 'json');
   });
 });

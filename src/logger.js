@@ -1,7 +1,7 @@
 import { serverConfig } from './config.js';
 
 const CATEGORIES = new Set([
-  'ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth',
+  'ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth', 'tcp',
 ]);
 
 function timestamp() {

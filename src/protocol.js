@@ -13,6 +13,12 @@ export const PROTO = Object.freeze({
 
     PAUSE: 0x30,
     RESUME: 0x31,
+
+    // TCP tunnel frame types
+    TCP_OPEN: 0x40,
+    TCP_DATA: 0x41,
+    TCP_CLOSE: 0x42,
+    TCP_ABORT: 0x43,
   }),
 });
 

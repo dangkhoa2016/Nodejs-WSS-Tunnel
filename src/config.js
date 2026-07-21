@@ -31,6 +31,55 @@ const MAX_DEST_BUFFER_BYTES = Number(process.env.MAX_DEST_BUFFER_BYTES || 8 * 10
 
 const META_LIMIT_BYTES = 64 * 1024;
 
+const TCP_TUNNEL_HOST = process.env.TCP_TUNNEL_HOST || '127.0.0.1';
+
+const TCP_TUNNEL_PORTS = (process.env.TCP_TUNNEL_PORTS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((s) => {
+    const n = parseInt(s, 10);
+    if (!Number.isFinite(n) || n <= 0 || n > 65535) {
+      console.warn(`[config] Invalid TCP port ignored: "${s}"`);
+      return null;
+    }
+    return n;
+  })
+  .filter((n) => n !== null);
+
+const TCP_TUNNEL_BIND_HOST = process.env.TCP_TUNNEL_BIND_HOST || '127.0.0.1';
+
+const TCP_TUNNEL_ALLOWED_IPS = (process.env.TCP_TUNNEL_ALLOWED_IPS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const TCP_CLIENT_ALLOWED_HOSTS = (process.env.TCP_CLIENT_ALLOWED_HOSTS || TCP_TUNNEL_HOST)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const TCP_CONNECT_TIMEOUT_MS = parseInt(process.env.TCP_CONNECT_TIMEOUT_MS || '10000', 10);
+
+const TCP_MAX_CONNECTIONS_PER_PORT = parseInt(
+  process.env.TCP_MAX_CONNECTIONS_PER_PORT || '20',
+  10,
+);
+
+const TCP_SHUTDOWN_DRAIN_TIMEOUT_MS = parseInt(
+  process.env.TCP_SHUTDOWN_DRAIN_TIMEOUT_MS || '5000',
+  10,
+);
+
+const WS_LOW_WATER = parseInt(process.env.WS_LOW_WATER || String(Math.floor(WS_HIGH_WATER / 2)), 10);
+
+if (TCP_TUNNEL_BIND_HOST === '0.0.0.0' && TCP_TUNNEL_ALLOWED_IPS.length === 0) {
+  console.warn(
+    '[config] SECURITY WARNING: TCP_TUNNEL_BIND_HOST=0.0.0.0 with no TCP_TUNNEL_ALLOWED_IPS set. ' +
+    'Tunneled TCP services will be reachable from anywhere.',
+  );
+}
+
 const serverConfig = {
   verbose: process.env.VERBOSE === 'true',
   logFormat: process.env.LOG_FORMAT || 'text',
@@ -58,10 +107,19 @@ export {
   STREAM_IDLE_TIMEOUT_MS,
   DRAIN_TIMEOUT_MS,
   WS_HIGH_WATER,
+  WS_LOW_WATER,
   MAX_FRAME_PAYLOAD,
   WS_MAX_PAYLOAD,
   MAX_DEST_BUFFER_BYTES,
   META_LIMIT_BYTES,
   ADMIN_SECRET,
   serverConfig,
+  TCP_TUNNEL_HOST,
+  TCP_TUNNEL_PORTS,
+  TCP_TUNNEL_BIND_HOST,
+  TCP_TUNNEL_ALLOWED_IPS,
+  TCP_CLIENT_ALLOWED_HOSTS,
+  TCP_CONNECT_TIMEOUT_MS,
+  TCP_MAX_CONNECTIONS_PER_PORT,
+  TCP_SHUTDOWN_DRAIN_TIMEOUT_MS,
 };

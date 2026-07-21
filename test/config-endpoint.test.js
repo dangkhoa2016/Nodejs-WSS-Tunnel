@@ -93,7 +93,7 @@ describe('Config endpoint integration tests', () => {
 
       onServerData = (data) => {
         output += data.toString();
-        const uuidMatch = output.match(/Install UUID: ([\w-]+)/);
+        const uuidMatch = output.match(/installUuid=([\w-]+)/);
         if (uuidMatch) {
           serverUuid = uuidMatch[1];
           clearTimeout(timeout);

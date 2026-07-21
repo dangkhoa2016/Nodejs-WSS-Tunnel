@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custom WS Tunnel</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      max-width: 640px;
+      width: 100%;
+      padding: 40px 20px;
+      text-align: center;
+    }
+    h1 {
+      font-size: 2.4rem;
+      margin-bottom: 8px;
+      background: linear-gradient(90deg, #00d2ff, #7b2ff7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .subtitle {
+      font-size: 1rem;
+      color: #aaa;
+      margin-bottom: 36px;
+    }
+    .card {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 20px;
+      text-align: left;
+    }
+    .card h2 {
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #7b2ff7;
+      margin-bottom: 12px;
+    }
+    .code-wrap {
+      position: relative;
+    }
+    code {
+      display: block;
+      background: rgba(0,0,0,0.35);
+      padding: 14px 16px;
+      border-radius: 8px;
+      font-size: 0.88rem;
+      line-height: 1.6;
+      overflow-x: auto;
+      color: #c8d6e5;
+      white-space: pre;
+    }
+    .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(255,255,255,0.1);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px;
+      color: #aaa;
+      padding: 4px 10px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: inherit;
+    }
+    .copy-btn:hover {
+      background: rgba(255,255,255,0.18);
+      color: #fff;
+    }
+    .copy-btn.copied {
+      background: #1a5c3a;
+      color: #5cd889;
+      border-color: #1a5c3a;
+    }
+    .note {
+      font-size: 0.82rem;
+      color: #888;
+      margin-top: 10px;
+      line-height: 1.5;
+    }
+    .note code {
+      display: inline;
+      padding: 1px 5px;
+      background: rgba(0,0,0,0.3);
+      border-radius: 4px;
+      font-size: 0.82rem;
+      color: #aaa;
+    }
+    .endpoints {
+      list-style: none;
+      padding: 0;
+    }
+    .endpoints li {
+      padding: 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .endpoints li:last-child { border-bottom: none; }
+    .method {
+      font-size: 0.75rem;
+      font-weight: 700;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin-right: 10px;
+      display: inline-block;
+      min-width: 42px;
+      text-align: center;
+    }
+    .get  { background: #1a5c3a; color: #5cd889; }
+    .post { background: #5c4a1a; color: #d8c85c; }
+    .path { font-family: monospace; color: #ccc; }
+    .desc { color: #888; font-size: 0.9rem; }
+    .env-vars {
+      list-style: none;
+      padding: 0;
+      margin: 12px 0 0;
+    }
+    .env-vars li {
+      padding: 6px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      align-items: baseline;
+    }
+    .env-vars li:last-child { border-bottom: none; }
+    .env-name {
+      font-family: monospace;
+      color: #00d2ff;
+      min-width: 160px;
+      font-size: 0.88rem;
+    }
+    .env-eq {
+      color: #666;
+      margin: 0 6px;
+    }
+    .env-val {
+      color: #aaa;
+      font-size: 0.88rem;
+    }
+    .footer {
+      margin-top: 32px;
+      font-size: 0.8rem;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Custom WS Tunnel</h1>
+    <p class="subtitle">HTTP-over-WebSocket Reverse Tunnel</p>
+
+    <div class="card">
+      <h2>Quick Start</h2>
+      <p class="note" style="margin-top:0; margin-bottom:10px; color:#aaa;">Interactive mode (will prompt for server URL &amp; credentials):</p>
+      <div class="code-wrap">
+        <code id="c-qs">curl -fsSL {{INSTALL_URL}} | bash</code>
+        <button class="copy-btn" onclick="copyCode('c-qs', this)">Copy</button>
+      </div>
+      <p class="note" style="margin-top:12px;">Or pass credentials directly via environment variables:</p>
+      <div class="code-wrap" style="margin-top:8px;">
+        <code id="c-qs-full">TUNNEL_SERVER_URL={{TUNNEL_WSS_URL}} \
+TUNNEL_USERNAME=&lt;user&gt; \
+TUNNEL_PASSWORD=&lt;pass&gt; \
+TARGET_ORIGIN=http://127.0.0.1:8000 \
+curl -fsSL {{INSTALL_URL}} | bash</code>
+        <button class="copy-btn" onclick="copyCode('c-qs-full', this)">Copy</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Endpoints</h2>
+      <ul class="endpoints">
+        <li>
+          <span><span class="method get">GET</span><span class="path">/__info</span></span>
+          <span class="desc">This page</span>
+        </li>
+        <li>
+          <span><span class="method get">GET</span><span class="path">/__health</span></span>
+          <span class="desc">Health check</span>
+        </li>
+        <li>
+          <span><span class="method get">GET</span><span class="path">{{INSTALL_URL}}</span></span>
+          <span class="desc">Install script</span>
+        </li>
+        <li>
+          <span><span class="method post">POST</span><span class="path">{{CONFIG_URL}}</span></span>
+          <span class="desc">Admin config (HMAC signed)</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Environment Variables</h2>
+      <ul class="env-vars">
+        <li>
+          <span class="env-name">TUNNEL_SERVER_URL</span>
+          <span class="env-eq">=</span>
+          <span class="env-val"><code style="display:inline;padding:0;background:none;border-radius:0;color:#aaa;">{{TUNNEL_WSS_URL}}</code></span>
+        </li>
+        <li>
+          <span class="env-name">TUNNEL_USERNAME</span>
+          <span class="env-eq">=</span>
+          <span class="env-val"><code style="display:inline;padding:0;background:none;border-radius:0;color:#aaa;">&lt;your-username&gt;</code></span>
+        </li>
+        <li>
+          <span class="env-name">TUNNEL_PASSWORD</span>
+          <span class="env-eq">=</span>
+          <span class="env-val"><code style="display:inline;padding:0;background:none;border-radius:0;color:#aaa;">&lt;your-password&gt;</code></span>
+        </li>
+        <li>
+          <span class="env-name">TARGET_ORIGIN</span>
+          <span class="env-eq">=</span>
+          <span class="env-val"><code style="display:inline;padding:0;background:none;border-radius:0;color:#aaa;">http://127.0.0.1:&lt;port&gt;</code></span>
+        </li>
+      </ul>
+    </div>
+
+    <p class="footer">Custom WS Tunnel &mdash; Powered by Node.js</p>
+  </div>
+
+  <script>
+    function copyCode(id, btn) {
+      const code = document.getElementById(id);
+      const text = code.textContent;
+      navigator.clipboard.writeText(text).then(function() {
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(function() {
+          btn.textContent = 'Copy';
+          btn.classList.remove('copied');
+        }, 1500);
+      });
+    }
+  </script>
+</body>
+</html>

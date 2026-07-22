@@ -5,6 +5,8 @@ import { sendFrame, sendJsonFrame, WsFrameWriter } from './WsFrameWriter.js';
 import { sanitizeHeaders } from './utils.js';
 import { logVerbose } from './logger.js';
 
+const WS_OPEN = 1;
+
 export class StreamManager {
   constructor() {
     this.streams = new Map();
@@ -116,6 +118,82 @@ export class StreamManager {
     }
 
     this.cleanupStream(state);
+  }
+
+  // ---------------------------------------------------------------------------
+  // TCP stream lifecycle
+  // ---------------------------------------------------------------------------
+
+  createTcpStream({ ws, socket, serverPort, streamId }) {
+    const state = {
+      id: streamId,
+      ws,
+      socket,
+      serverPort,
+      mode: 'tcp',
+
+      cleaned: false,
+      abortSent: false,
+      requestEnded: false,
+
+      peerPausedForWrite: false,
+      timer: null,
+      onCleanup: null,
+    };
+
+    this.streams.set(streamId, state);
+    this._resetIdleTimer(state);
+
+    socket.on('drain', () => {
+      if (state.cleaned) return;
+      if (state.peerPausedForWrite && state.ws.readyState === WS_OPEN) {
+        state.peerPausedForWrite = false;
+        sendFrame(state.ws, FrameCodec.buildFrame(PROTO.TYPE.RESUME, state.id));
+      }
+    });
+
+    logVerbose('stream', 'tcp_allocate', { streamId, serverPort, clientCount: this.streams.size });
+    return state;
+  }
+
+  cleanupTcpStream(state) {
+    if (state.cleaned) return;
+    state.cleaned = true;
+
+    if (state.timer) clearTimeout(state.timer);
+    this.streams.delete(state.id);
+
+    if (state.socket) {
+      try { state.socket.destroy(); } catch { /* ignore */ }
+    }
+    if (typeof state.onCleanup === 'function') {
+      try { state.onCleanup(); } catch { /* ignore */ }
+    }
+  }
+
+  abortTcpStream(state, reason, notifyClient) {
+    if (state.cleaned) return;
+
+    logVerbose('stream', 'tcp_abort', { streamId: state.id, reason, notifyClient });
+
+    if (notifyClient && state.ws && state.ws.readyState === WS_OPEN && !state.abortSent) {
+      state.abortSent = true;
+      sendJsonFrame(state.ws, PROTO.TYPE.TCP_ABORT, state.id, {
+        message: reason || 'TCP stream aborted',
+      });
+    }
+    this.cleanupTcpStream(state);
+  }
+
+  getTcpStreams() {
+    return [...this.streams.values()].filter((s) => s.mode === 'tcp');
+  }
+
+  cleanupStreamsForWs(ws) {
+    for (const state of this.streams.values()) {
+      if (state.ws !== ws || state.mode !== 'tcp') continue;
+      this.abortTcpStream(state, 'Tunnel WebSocket disconnected', false);
+    }
   }
 
   createStream({ ws, req, res, meta, streamId }) {
@@ -327,16 +405,45 @@ export class StreamManager {
         }
 
         case PROTO.TYPE.PAUSE: {
-          if (state.requestWriter) {
+          if (state.mode === 'tcp') {
+            state.peerPausedForWrite = true;
+          } else if (state.requestWriter) {
             state.requestWriter.setPeerPaused(true);
           }
           break;
         }
 
         case PROTO.TYPE.RESUME: {
-          if (state.requestWriter) {
+          if (state.mode === 'tcp') {
+            state.peerPausedForWrite = false;
+          } else if (state.requestWriter) {
             state.requestWriter.setPeerPaused(false);
           }
+          break;
+        }
+
+        case PROTO.TYPE.TCP_DATA: {
+          if (state.mode !== 'tcp') return;
+          if (!state.socket || state.socket.destroyed) return;
+          try {
+            state.socket.write(payload);
+          } catch {
+            this.abortTcpStream(state, 'Failed to write TCP socket', true);
+          }
+          break;
+        }
+
+        case PROTO.TYPE.TCP_CLOSE: {
+          if (state.mode !== 'tcp') return;
+          this.cleanupTcpStream(state);
+          break;
+        }
+
+        case PROTO.TYPE.TCP_ABORT: {
+          if (state.mode !== 'tcp') return;
+          let info = {};
+          try { info = FrameCodec.parseJsonPayload(payload); } catch { /* ignore */ }
+          this.abortTcpStream(state, info.message || 'Client aborted', false);
           break;
         }
 

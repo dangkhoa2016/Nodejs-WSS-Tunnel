@@ -5,6 +5,7 @@ import { WebSocketServer } from 'ws';
 import { StreamManager } from './StreamManager.js';
 import { ClientManager } from './ClientManager.js';
 import { HttpRouter } from './HttpRouter.js';
+import { TcpRouter } from './TcpRouter.js';
 import { logStandard, logVerbose } from './logger.js';
 
 export class TunnelServer {
@@ -12,6 +13,7 @@ export class TunnelServer {
     this.streamManager = new StreamManager();
     this.clientManager = new ClientManager(this.streamManager);
     this.httpRouter = new HttpRouter(this.streamManager, this.clientManager);
+    this.tcpRouter = new TcpRouter(this.streamManager, this.clientManager);
 
     this._server = null;
     this._wss = null;
@@ -115,6 +117,7 @@ export class TunnelServer {
       });
     });
 
+    this.tcpRouter.start();
     this._setupProcessHandlers();
   }
 
@@ -123,6 +126,12 @@ export class TunnelServer {
       console.log('[server] SIGTERM received, shutting down...');
 
       this.clientManager.stopHeartbeat();
+
+      try {
+        await this.tcpRouter.close();
+      } catch {
+        // ignore
+      }
 
       try {
         this._wss.close();

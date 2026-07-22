@@ -1,0 +1,228 @@
+import { describe, it, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { PROTO, FrameCodec } from '../src/protocol.js';
+
+function mockWs(readyState = 1) {
+  const sent = [];
+  return {
+    readyState,
+    bufferedAmount: 0,
+    send(data, opts, cb) {
+      sent.push(data);
+      if (typeof cb === 'function') cb();
+    },
+    _sent() { return sent; },
+    _clear() { sent.length = 0; },
+  };
+}
+
+async function createHandler(overrides = {}) {
+  const streams = new Map();
+  const sent = [];
+
+  const deps = {
+    streams,
+    MAX_CONCURRENT_STREAMS: 200,
+    TCP_TUNNEL_HOST: '127.0.0.1',
+    TCP_CLIENT_ALLOWED_HOSTS: ['127.0.0.1', 'localhost'],
+    TCP_CONNECT_TIMEOUT_MS: 5000,
+    WS_HIGH_WATER: 1024 * 1024,
+    WS_LOW_WATER: 512 * 1024,
+    sendFrame: (ws, frame) => { sent.push({ ws, frame }); return true; },
+    sendJsonFrame: (ws, type, streamId, obj) => { sent.push({ ws, type, streamId, obj }); return true; },
+    buildFrame: (type, streamId, payload) => {
+      const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '');
+      const buf = Buffer.allocUnsafe(6 + p.length);
+      buf[0] = 1;
+      buf[1] = type;
+      buf.writeUInt32BE(streamId >>> 0, 2);
+      if (p.length > 0) p.copy(buf, 6);
+      return buf;
+    },
+    parseJsonPayload: (payload) => {
+      if (!payload || payload.length === 0) throw new Error('Empty');
+      return JSON.parse(payload.toString('utf8'));
+    },
+    resetIdleTimer: () => {},
+    cleanupStream: () => {},
+    ...overrides,
+  };
+
+  const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+  const handler = createTcpClientHandler(deps);
+
+  return { handler, streams, sent, deps };
+}
+
+describe('TcpClientHandler', () => {
+  describe('handleServerFrame routing', () => {
+    it('handles TCP_OPEN and returns true', async () => {
+      const { handler, sent } = await createHandler();
+
+      const ws = mockWs();
+      const payload = Buffer.from(JSON.stringify({ host: '127.0.0.1', port: 6379 }));
+
+      const result = handler.handleServerFrame(PROTO.TYPE.TCP_OPEN, ws, 1, payload, null);
+
+      assert.equal(result, true);
+      handler.cleanupTcpStreams();
+    });
+
+    it('handles TCP_DATA and returns true', async () => {
+      const { handler, streams } = await createHandler();
+
+      const ws = mockWs();
+      const streamId = 1;
+
+      streams.set(streamId, {
+        id: streamId,
+        ws,
+        mode: 'tcp',
+        localSocket: {
+          destroyed: false,
+          write: () => {},
+        },
+        cleaned: false,
+        timer: null,
+      });
+
+      const result = handler.handleServerFrame(PROTO.TYPE.TCP_DATA, ws, streamId, Buffer.from('hello'), streams.get(streamId));
+
+      assert.equal(result, true);
+    });
+
+    it('handles TCP_CLOSE and returns true', async () => {
+      const { handler, streams } = await createHandler();
+
+      const ws = mockWs();
+      const streamId = 1;
+
+      streams.set(streamId, {
+        id: streamId,
+        ws,
+        mode: 'tcp',
+        localSocket: { destroyed: false, destroy() {} },
+        cleaned: false,
+        timer: null,
+      });
+
+      const result = handler.handleServerFrame(PROTO.TYPE.TCP_CLOSE, ws, streamId, Buffer.alloc(0), streams.get(streamId));
+
+      assert.equal(result, true);
+      assert.equal(streams.has(streamId), false);
+    });
+
+    it('handles TCP_ABORT and returns true', async () => {
+      const { handler, streams } = await createHandler();
+
+      const ws = mockWs();
+      const streamId = 1;
+
+      streams.set(streamId, {
+        id: streamId,
+        ws,
+        mode: 'tcp',
+        localSocket: { destroyed: false, destroy() {} },
+        cleaned: false,
+        timer: null,
+      });
+
+      const payload = Buffer.from(JSON.stringify({ message: 'error' }));
+      const result = handler.handleServerFrame(PROTO.TYPE.TCP_ABORT, ws, streamId, payload, streams.get(streamId));
+
+      assert.equal(result, true);
+      assert.equal(streams.has(streamId), false);
+    });
+
+    it('handles PAUSE for TCP stream', async () => {
+      const { handler, streams } = await createHandler();
+
+      let paused = false;
+      const localSocket = {
+        destroyed: false,
+        pause() { paused = true; },
+      };
+
+      const streamId = 1;
+      streams.set(streamId, {
+        id: streamId,
+        ws: mockWs(),
+        mode: 'tcp',
+        localSocket,
+        cleaned: false,
+        timer: null,
+      });
+
+      const result = handler.handleServerFrame(PROTO.TYPE.PAUSE, mockWs(), streamId, Buffer.alloc(0), streams.get(streamId));
+
+      assert.equal(result, true);
+      assert.equal(paused, true);
+    });
+
+    it('handles RESUME for TCP stream', async () => {
+      const { handler, streams } = await createHandler();
+
+      let resumed = false;
+      const localSocket = {
+        destroyed: false,
+        resume() { resumed = true; },
+      };
+
+      const streamId = 1;
+      streams.set(streamId, {
+        id: streamId,
+        ws: mockWs(),
+        mode: 'tcp',
+        localSocket,
+        cleaned: false,
+        timer: null,
+      });
+
+      const result = handler.handleServerFrame(PROTO.TYPE.RESUME, mockWs(), streamId, Buffer.alloc(0), streams.get(streamId));
+
+      assert.equal(result, true);
+      assert.equal(resumed, true);
+    });
+
+    it('returns false for unknown frame types', async () => {
+      const { handler } = await createHandler();
+
+      const result = handler.handleServerFrame(0xFF, mockWs(), 1, Buffer.alloc(0), null);
+
+      assert.equal(result, false);
+    });
+
+    it('rejects TCP_OPEN with disallowed host', async () => {
+      const { handler, sent } = await createHandler({
+        TCP_CLIENT_ALLOWED_HOSTS: ['10.0.0.1'],
+      });
+
+      const ws = mockWs();
+      const payload = Buffer.from(JSON.stringify({ host: 'evil.com', port: 6379 }));
+
+      handler.handleServerFrame(PROTO.TYPE.TCP_OPEN, ws, 1, payload, null);
+
+      assert.ok(sent.length > 0);
+      assert.equal(sent[0].type, PROTO.TYPE.TCP_ABORT);
+    });
+  });
+
+  describe('cleanupTcpStreams', () => {
+    it('cleans up all TCP streams', async () => {
+      const { handler, streams } = await createHandler();
+
+      streams.set(1, {
+        id: 1, mode: 'tcp', cleaned: false, timer: null,
+        localSocket: { destroyed: false, destroy() {} },
+      });
+      streams.set(2, {
+        id: 2, mode: 'http', cleaned: false, timer: null,
+      });
+
+      handler.cleanupTcpStreams();
+
+      assert.equal(streams.has(1), false);
+      assert.equal(streams.has(2), true);
+    });
+  });
+});

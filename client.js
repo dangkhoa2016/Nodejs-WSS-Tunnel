@@ -5,6 +5,8 @@ import { Writable, pipeline } from 'stream';
 
 import WebSocket from 'ws';
 
+import { createTcpClientHandler } from './src/TcpClientHandler.js';
+
 if (process.env.NODE_ENV === 'development') {
   try {
     await import('dotenv/config');
@@ -82,6 +84,12 @@ const PROTO = Object.freeze({
 
     PAUSE: 0x30,
     RESUME: 0x31,
+
+    // TCP tunnel frame types
+    TCP_OPEN: 0x40,
+    TCP_DATA: 0x41,
+    TCP_CLOSE: 0x42,
+    TCP_ABORT: 0x43,
   }),
 });
 
@@ -280,10 +288,42 @@ class WsFrameWriter extends Writable {
 }
 
 // ---------------------------------------------------------------------------
+// TCP Tunnel Config
+// ---------------------------------------------------------------------------
+
+const TCP_TUNNEL_HOST = process.env.TCP_TUNNEL_HOST || '127.0.0.1';
+const TCP_CLIENT_ALLOWED_HOSTS = (process.env.TCP_CLIENT_ALLOWED_HOSTS || TCP_TUNNEL_HOST)
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const TCP_CONNECT_TIMEOUT_MS = Number(process.env.TCP_CONNECT_TIMEOUT_MS || 10000);
+const WS_LOW_WATER = Math.floor(WS_HIGH_WATER / 2);
+
+// ---------------------------------------------------------------------------
+// TCP Client Handler
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
 // Stream state
 // ---------------------------------------------------------------------------
 
 const streams = new Map();
+
+const tcpHandler = createTcpClientHandler({
+  streams,
+  MAX_CONCURRENT_STREAMS,
+  TCP_TUNNEL_HOST,
+  TCP_CLIENT_ALLOWED_HOSTS,
+  TCP_CONNECT_TIMEOUT_MS,
+  WS_HIGH_WATER,
+  WS_LOW_WATER,
+  sendFrame,
+  sendJsonFrame,
+  buildFrame,
+  parseJsonPayload,
+  resetIdleTimer,
+  cleanupStream,
+});
 
 let ws = null;
 let reconnectTimer = null;
@@ -340,6 +380,8 @@ function cleanupStream(state) {
 }
 
 function cleanupAllStreams() {
+  tcpHandler.cleanupTcpStreams();
+
   for (const state of streams.values()) {
     cleanupStream(state);
   }
@@ -382,6 +424,11 @@ function handleServerFrame(currentWs, data) {
   resetIdleTimer(state);
 
   try {
+    // Route TCP frames to the TCP handler; fall through to HTTP if not handled.
+    if (tcpHandler.handleServerFrame(type, currentWs, streamId, payload, state)) {
+      return;
+    }
+
     switch (type) {
       case PROTO.TYPE.REQ_DATA: {
         handleReqData(state, payload);

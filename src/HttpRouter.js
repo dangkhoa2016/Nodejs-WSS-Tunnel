@@ -4,7 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { TUNNEL_PATH, SERVER_HOST, INSTALL_UUID, MAX_CONCURRENT_STREAMS, ADMIN_SECRET } from './config.js';
 import { PROTO, FrameCodec } from './protocol.js';
-import { sanitizeHeaders, validateHmacSignature } from './utils.js';
+import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils.js';
 import { sendFrame } from './WsFrameWriter.js';
 import { logStandard, logVerbose, getConfig, setConfig } from './logger.js';
 
@@ -218,6 +218,23 @@ export class HttpRouter {
         // ignore
       }
 
+      socket.destroy();
+      return;
+    }
+
+    if (!verifyBasicAuth(req)) {
+      logStandard('auth', 'ws_reject', { pathname, reason: 'invalid_credentials' });
+      try {
+        socket.write(
+          'HTTP/1.1 401 Unauthorized\r\n' +
+          'WWW-Authenticate: Basic realm="tunnel"\r\n' +
+          'Connection: close\r\n' +
+          'Content-Length: 0\r\n' +
+          '\r\n'
+        );
+      } catch {
+        // ignore
+      }
       socket.destroy();
       return;
     }

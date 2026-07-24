@@ -36,7 +36,7 @@ export class StreamManager {
 
     state.timer = setTimeout(() => {
       logVerbose('stream', 'idle_timeout', { streamId: state.id });
-      this.abortStream(state, 'Stream idle timeout', true);
+      this.abortAnyStream(state, 'Stream idle timeout', true);
     }, STREAM_IDLE_TIMEOUT_MS);
 
     if (state.timer.unref) state.timer.unref();
@@ -120,6 +120,22 @@ export class StreamManager {
     this.cleanupStream(state);
   }
 
+  cleanupAnyStream(state) {
+    if (state.mode === 'tcp') {
+      this.cleanupTcpStream(state);
+    } else {
+      this.cleanupStream(state);
+    }
+  }
+
+  abortAnyStream(state, reason, notifyClient) {
+    if (state.mode === 'tcp') {
+      this.abortTcpStream(state, reason, notifyClient);
+    } else {
+      this.abortStream(state, reason, notifyClient);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // TCP stream lifecycle
   // ---------------------------------------------------------------------------
@@ -191,14 +207,15 @@ export class StreamManager {
 
   cleanupStreamsForWs(ws) {
     for (const state of this.streams.values()) {
-      if (state.ws !== ws || state.mode !== 'tcp') continue;
-      this.abortTcpStream(state, 'Tunnel WebSocket disconnected', false);
+      if (state.ws !== ws) continue;
+      this.abortAnyStream(state, 'Tunnel WebSocket disconnected', false);
     }
   }
 
   createStream({ ws, req, res, meta, streamId }) {
     const state = {
       id: streamId,
+      mode: 'http',
       ws,
       req,
       res,
@@ -452,7 +469,7 @@ export class StreamManager {
         }
       }
     } catch {
-      this.abortStream(state, 'Bad frame from tunnel client', false);
+      this.abortAnyStream(state, 'Bad frame from tunnel client', false);
     }
   }
 }

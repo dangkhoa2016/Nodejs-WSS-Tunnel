@@ -1,10 +1,13 @@
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
-import { Writable, pipeline } from 'stream';
+import { pipeline } from 'stream';
 
 import WebSocket from 'ws';
 
+import { PROTO, FrameCodec } from './src/protocol.js';
+import { sendFrame, sendJsonFrame, WsFrameWriter } from './src/WsFrameWriter.js';
+import { sanitizeHeaders } from './src/utils.js';
 import { createTcpClientHandler } from './src/TcpClientHandler.js';
 
 if (process.env.NODE_ENV === 'development') {
@@ -25,10 +28,9 @@ if (process.env.NODE_ENV === 'development') {
  * - Streams responses back using binary frames.
  * - Supports backpressure, timeout, and reconnect.
  *
- * NOTE: This file is intentionally standalone. It duplicates PROTO and
- * WsFrameWriter from src/ so the client can be deployed independently
- * (e.g. pip install + node client.js) without shipping the full server.
- * Only TcpClientHandler is imported from src/ — it has no server deps.
+ * NOTE: This file imports shared protocol/modules from src/. When bundled
+ * with esbuild, the client can be deployed independently
+ * (e.g. pip install + node client.js) without shipping the full server tree.
  *
  * Required env vars:
  *   TUNNEL_SERVER_URL
@@ -66,228 +68,6 @@ const targetBase = new URL(TARGET_ORIGIN);
 const targetRequestModule = targetBase.protocol === 'https:' ? https : http;
 
 // ---------------------------------------------------------------------------
-// Protocol constants
-// ---------------------------------------------------------------------------
-
-const PROTO = Object.freeze({
-  VERSION: 1,
-  TYPE: Object.freeze({
-    REQ_META: 0x10,
-    REQ_DATA: 0x11,
-    REQ_END: 0x12,
-    REQ_ABORT: 0x13,
-
-    RES_META: 0x20,
-    RES_DATA: 0x21,
-    RES_END: 0x22,
-    RES_ABORT: 0x23,
-
-    PAUSE: 0x30,
-    RESUME: 0x31,
-
-    // TCP tunnel frame types
-    TCP_OPEN: 0x40,
-    TCP_DATA: 0x41,
-    TCP_CLOSE: 0x42,
-    TCP_ABORT: 0x43,
-  }),
-});
-
-// ---------------------------------------------------------------------------
-// Utils
-// ---------------------------------------------------------------------------
-
-const HOP_BY_HOP_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  'proxy-connection',
-]);
-
-function sanitizeHeaders(headers, { removeHost = true } = {}) {
-  const out = {};
-
-  for (const [key, value] of Object.entries(headers || {})) {
-    if (value === undefined || value === null) continue;
-
-    const lower = key.toLowerCase();
-
-    if (HOP_BY_HOP_HEADERS.has(lower)) continue;
-    if (removeHost && lower === 'host') continue;
-
-    out[key] = value;
-  }
-
-  return out;
-}
-
-function toBuffer(data) {
-  if (Buffer.isBuffer(data)) return data;
-
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(data);
-  }
-
-  if (ArrayBuffer.isView(data)) {
-    return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-  }
-
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-
-  return Buffer.from(data);
-}
-
-function buildFrame(type, streamId, payload = Buffer.alloc(0)) {
-  const bufPayload = Buffer.isBuffer(payload) ? payload : Buffer.from(payload);
-  const frame = Buffer.allocUnsafe(6 + bufPayload.length);
-
-  frame[0] = PROTO.VERSION;
-  frame[1] = type;
-  frame.writeUInt32BE(streamId >>> 0, 2);
-
-  if (bufPayload.length > 0) {
-    bufPayload.copy(frame, 6);
-  }
-
-  return frame;
-}
-
-function parseFrame(data) {
-  const buf = toBuffer(data);
-
-  if (buf.length < 6) {
-    throw new Error('Frame too short');
-  }
-
-  const version = buf[0];
-  if (version !== PROTO.VERSION) {
-    throw new Error(`Unsupported protocol version: ${version}`);
-  }
-
-  const type = buf[1];
-  const streamId = buf.readUInt32BE(2);
-  const payload = buf.subarray(6);
-
-  return { type, streamId, payload };
-}
-
-function parseJsonPayload(payload, limit = MAX_FRAME_PAYLOAD) {
-  if (!payload || payload.length === 0) {
-    throw new Error('Empty JSON payload');
-  }
-
-  if (payload.length > limit) {
-    throw new Error('JSON payload too large');
-  }
-
-  return JSON.parse(payload.toString('utf8'));
-}
-
-function sendFrame(ws, frame) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-
-  try {
-    ws.send(frame);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function sendJsonFrame(ws, type, streamId, obj) {
-  const payload = Buffer.from(JSON.stringify(obj));
-  return sendFrame(ws, buildFrame(type, streamId, payload));
-}
-
-function waitDrain(ws) {
-  return new Promise((resolve) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      resolve();
-      return;
-    }
-
-    if (ws.bufferedAmount <= WS_HIGH_WATER) {
-      resolve();
-      return;
-    }
-
-    const check = () => {
-      if (ws.bufferedAmount <= WS_HIGH_WATER) {
-        ws.removeListener('drain', check);
-        resolve();
-      }
-    };
-
-    ws.on('drain', check);
-
-    setTimeout(() => {
-      ws.removeListener('drain', check);
-      resolve();
-    }, DRAIN_TIMEOUT_MS);
-  });
-}
-
-class WsFrameWriter extends Writable {
-  constructor({ ws, streamId, frameType }) {
-    super({ objectMode: false });
-    this.ws = ws;
-    this.streamId = streamId;
-    this.frameType = frameType;
-    this._peerPaused = false;
-    this._pendingDrain = null;
-  }
-
-  _write(chunk, encoding, callback) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      callback(new Error('WebSocket not open'));
-      return;
-    }
-
-    const frame = buildFrame(this.frameType, this.streamId, chunk);
-
-    try {
-      this.ws.send(frame);
-    } catch (err) {
-      callback(err);
-      return;
-    }
-
-    if (this.ws.bufferedAmount > WS_HIGH_WATER) {
-      this._pendingDrain = callback;
-      this.ws.once('drain', () => {
-        const cb = this._pendingDrain;
-        this._pendingDrain = null;
-        if (cb) cb();
-      });
-    } else {
-      callback();
-    }
-  }
-
-  setPeerPaused(paused) {
-    this._peerPaused = paused;
-  }
-
-  _final(callback) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      try {
-        this.ws.send(buildFrame(PROTO.TYPE.REQ_END, this.streamId));
-      } catch {
-        // ignore
-      }
-    }
-    callback();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // TCP Tunnel Config
 // ---------------------------------------------------------------------------
 
@@ -319,8 +99,8 @@ const tcpHandler = createTcpClientHandler({
   WS_LOW_WATER,
   sendFrame,
   sendJsonFrame,
-  buildFrame,
-  parseJsonPayload,
+  buildFrame: FrameCodec.buildFrame,
+  parseJsonPayload: FrameCodec.parseJsonPayload,
   resetIdleTimer,
   cleanupStream,
 });
@@ -405,7 +185,7 @@ function handleServerFrame(currentWs, data) {
   let frame;
 
   try {
-    frame = parseFrame(data);
+    frame = FrameCodec.parseFrame(data);
   } catch {
     return;
   }
@@ -496,7 +276,7 @@ function handleReqMeta(currentWs, streamId, payload) {
   let meta;
 
   try {
-    meta = parseJsonPayload(payload);
+    meta = FrameCodec.parseJsonPayload(payload, MAX_FRAME_PAYLOAD);
   } catch {
     sendJsonFrame(currentWs, PROTO.TYPE.RES_ABORT, streamId, {
       message: 'Invalid REQ_META payload',
@@ -606,7 +386,7 @@ function handleReqMeta(currentWs, streamId, payload) {
         if (state.cleaned || state.responseEnded) return;
 
         state.responseEnded = true;
-        sendFrame(currentWs, buildFrame(PROTO.TYPE.RES_END, streamId));
+        sendFrame(currentWs, FrameCodec.buildFrame(PROTO.TYPE.RES_END, streamId));
         cleanupStream(state);
       });
 

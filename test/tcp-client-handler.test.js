@@ -1,6 +1,7 @@
-import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTO, FrameCodec } from '../src/protocol.js';
+import { beforeEach, describe, it } from 'node:test';
+import { syncSocketReadState } from '../src/TcpFlowControl.js';
+import { FrameCodec, PROTO } from '../src/protocol.js';
 
 function mockWs(readyState = 1) {
   const sent = [];
@@ -11,8 +12,12 @@ function mockWs(readyState = 1) {
       sent.push(data);
       if (typeof cb === 'function') cb();
     },
-    _sent() { return sent; },
-    _clear() { sent.length = 0; },
+    _sent() {
+      return sent;
+    },
+    _clear() {
+      sent.length = 0;
+    },
   };
 }
 
@@ -28,8 +33,14 @@ async function createHandler(overrides = {}) {
     TCP_CONNECT_TIMEOUT_MS: 5000,
     WS_HIGH_WATER: 1024 * 1024,
     WS_LOW_WATER: 512 * 1024,
-    sendFrame: (ws, frame) => { sent.push({ ws, frame }); return true; },
-    sendJsonFrame: (ws, type, streamId, obj) => { sent.push({ ws, type, streamId, obj }); return true; },
+    sendFrame: (ws, frame) => {
+      sent.push({ ws, frame });
+      return true;
+    },
+    sendJsonFrame: (ws, type, streamId, obj) => {
+      sent.push({ ws, type, streamId, obj });
+      return true;
+    },
     buildFrame: (type, streamId, payload) => {
       const p = Buffer.isBuffer(payload) ? payload : Buffer.from(payload || '');
       const buf = Buffer.allocUnsafe(6 + p.length);
@@ -86,7 +97,13 @@ describe('TcpClientHandler', () => {
         timer: null,
       });
 
-      const result = handler.handleServerFrame(PROTO.TYPE.TCP_DATA, ws, streamId, Buffer.from('hello'), streams.get(streamId));
+      const result = handler.handleServerFrame(
+        PROTO.TYPE.TCP_DATA,
+        ws,
+        streamId,
+        Buffer.from('hello'),
+        streams.get(streamId),
+      );
 
       assert.equal(result, true);
     });
@@ -106,7 +123,13 @@ describe('TcpClientHandler', () => {
         timer: null,
       });
 
-      const result = handler.handleServerFrame(PROTO.TYPE.TCP_CLOSE, ws, streamId, Buffer.alloc(0), streams.get(streamId));
+      const result = handler.handleServerFrame(
+        PROTO.TYPE.TCP_CLOSE,
+        ws,
+        streamId,
+        Buffer.alloc(0),
+        streams.get(streamId),
+      );
 
       assert.equal(result, true);
       assert.equal(streams.has(streamId), false);
@@ -140,7 +163,9 @@ describe('TcpClientHandler', () => {
       let paused = false;
       const localSocket = {
         destroyed: false,
-        pause() { paused = true; },
+        pause() {
+          paused = true;
+        },
       };
 
       const streamId = 1;
@@ -153,7 +178,13 @@ describe('TcpClientHandler', () => {
         timer: null,
       });
 
-      const result = handler.handleServerFrame(PROTO.TYPE.PAUSE, mockWs(), streamId, Buffer.alloc(0), streams.get(streamId));
+      const result = handler.handleServerFrame(
+        PROTO.TYPE.PAUSE,
+        mockWs(),
+        streamId,
+        Buffer.alloc(0),
+        streams.get(streamId),
+      );
 
       assert.equal(result, true);
       assert.equal(paused, true);
@@ -165,7 +196,9 @@ describe('TcpClientHandler', () => {
       let resumed = false;
       const localSocket = {
         destroyed: false,
-        resume() { resumed = true; },
+        resume() {
+          resumed = true;
+        },
       };
 
       const streamId = 1;
@@ -178,16 +211,88 @@ describe('TcpClientHandler', () => {
         timer: null,
       });
 
-      const result = handler.handleServerFrame(PROTO.TYPE.RESUME, mockWs(), streamId, Buffer.alloc(0), streams.get(streamId));
+      const result = handler.handleServerFrame(
+        PROTO.TYPE.RESUME,
+        mockWs(),
+        streamId,
+        Buffer.alloc(0),
+        streams.get(streamId),
+      );
 
       assert.equal(result, true);
       assert.equal(resumed, true);
     });
 
+    it('releases pause only after both reasons clear (peer first)', async () => {
+      const { streams } = await createHandler();
+      const streamId = 1;
+
+      let pauseCalls = 0;
+      let resumeCalls = 0;
+      const localSocket = {
+        destroyed: false,
+        pause() {
+          pauseCalls++;
+        },
+        resume() {
+          resumeCalls++;
+        },
+      };
+
+      const state = {
+        id: streamId,
+        mode: 'tcp',
+        localSocket,
+        peerPausedRead: true,
+        localPausedForWs: true,
+      };
+
+      state.peerPausedRead = false;
+      syncSocketReadState(state, localSocket);
+      assert.equal(resumeCalls, 0, 'peer cleared but WS still paused');
+
+      state.localPausedForWs = false;
+      syncSocketReadState(state, localSocket);
+      assert.equal(resumeCalls, 1, 'both clear');
+    });
+
+    it('releases pause only after both reasons clear (WS first)', async () => {
+      const { streams } = await createHandler();
+      const streamId = 1;
+
+      let pauseCalls = 0;
+      let resumeCalls = 0;
+      const localSocket = {
+        destroyed: false,
+        pause() {
+          pauseCalls++;
+        },
+        resume() {
+          resumeCalls++;
+        },
+      };
+
+      const state = {
+        id: streamId,
+        mode: 'tcp',
+        localSocket,
+        peerPausedRead: true,
+        localPausedForWs: true,
+      };
+
+      state.localPausedForWs = false;
+      syncSocketReadState(state, localSocket);
+      assert.equal(resumeCalls, 0, 'WS cleared but peer still paused');
+
+      state.peerPausedRead = false;
+      syncSocketReadState(state, localSocket);
+      assert.equal(resumeCalls, 1, 'both clear');
+    });
+
     it('returns false for unknown frame types', async () => {
       const { handler } = await createHandler();
 
-      const result = handler.handleServerFrame(0xFF, mockWs(), 1, Buffer.alloc(0), null);
+      const result = handler.handleServerFrame(0xff, mockWs(), 1, Buffer.alloc(0), null);
 
       assert.equal(result, false);
     });
@@ -212,11 +317,17 @@ describe('TcpClientHandler', () => {
       const { handler, streams } = await createHandler();
 
       streams.set(1, {
-        id: 1, mode: 'tcp', cleaned: false, timer: null,
+        id: 1,
+        mode: 'tcp',
+        cleaned: false,
+        timer: null,
         localSocket: { destroyed: false, destroy() {} },
       });
       streams.set(2, {
-        id: 2, mode: 'http', cleaned: false, timer: null,
+        id: 2,
+        mode: 'http',
+        cleaned: false,
+        timer: null,
       });
 
       handler.cleanupTcpStreams();

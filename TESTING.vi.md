@@ -66,6 +66,11 @@ node --test test/*.test.js
   node --test test/tcp-router.test.js
   ```
 
+- **Kiểm thử TCP Flow Control**:
+  ```bash
+  node --test test/tcp-flow-control.test.js
+  ```
+
 - **Kiểm thử TCP End-to-End**:
   ```bash
   node --test test/tcp-e2e.test.js
@@ -188,6 +193,12 @@ Kiểm thử đơn vị cho `src/ipAllowlist.js`:
 - So khớp IP chính xác, CIDR `/32`, `/24`, `/16`, `/0`.
 - Loại bỏ tiền tố IPv4-mapped IPv6.
 - Nhiều mục allowlist, xử lý CIDR không hợp lệ.
+
+### 13. `test/tcp-flow-control.test.js` (Unit Tests)
+Kiểm thử đơn vị cho điều phối flow control TCP trong `src/TcpFlowControl.js`:
+- `syncSocketReadState()` phối hợp `peerPausedRead` và `localPausedForWs` quyết định pause/resume socket thực tế.
+- Pause ở WS trong khi peer đã pause giữ socket ở trạng thái pause.
+- Resume ở WS trong khi peer vẫn pause giữ socket ở trạng thái pause.
 
 ---
 

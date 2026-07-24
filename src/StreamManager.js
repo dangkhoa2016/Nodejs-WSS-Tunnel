@@ -1,9 +1,10 @@
 import WebSocket from 'ws';
-import { STREAM_IDLE_TIMEOUT_MS, MAX_DEST_BUFFER_BYTES } from './config.js';
-import { PROTO, FrameCodec } from './protocol.js';
-import { sendFrame, sendJsonFrame, WsFrameWriter } from './WsFrameWriter.js';
-import { sanitizeHeaders } from './utils.js';
+import { syncSocketReadState } from './TcpFlowControl.js';
+import { WsFrameWriter, sendFrame, sendJsonFrame } from './WsFrameWriter.js';
+import { MAX_DEST_BUFFER_BYTES, STREAM_IDLE_TIMEOUT_MS } from './config.js';
 import { logVerbose } from './logger.js';
+import { FrameCodec, PROTO } from './protocol.js';
+import { sanitizeHeaders } from './utils.js';
 
 const WS_OPEN = 1;
 
@@ -96,10 +97,12 @@ export class StreamManager {
           'Content-Type': 'application/json; charset=utf-8',
           'Cache-Control': 'no-store',
         });
-        state.res.end(JSON.stringify({
-          error: 'tunnel_error',
-          message: reason || 'Tunnel error',
-        }));
+        state.res.end(
+          JSON.stringify({
+            error: 'tunnel_error',
+            message: reason || 'Tunnel error',
+          }),
+        );
       } catch {
         // ignore
       }
@@ -152,7 +155,8 @@ export class StreamManager {
       abortSent: false,
       requestEnded: false,
 
-      peerPausedForWrite: false,
+      localWriteBackpressured: false,
+      peerPausedRead: false,
       timer: null,
       onCleanup: null,
     };
@@ -162,8 +166,8 @@ export class StreamManager {
 
     socket.on('drain', () => {
       if (state.cleaned) return;
-      if (state.peerPausedForWrite && state.ws.readyState === WS_OPEN) {
-        state.peerPausedForWrite = false;
+      if (state.localWriteBackpressured && state.ws.readyState === WS_OPEN) {
+        state.localWriteBackpressured = false;
         sendFrame(state.ws, FrameCodec.buildFrame(PROTO.TYPE.RESUME, state.id));
       }
     });
@@ -180,10 +184,18 @@ export class StreamManager {
     this.streams.delete(state.id);
 
     if (state.socket) {
-      try { state.socket.destroy(); } catch { /* ignore */ }
+      try {
+        state.socket.destroy();
+      } catch {
+        /* ignore */
+      }
     }
     if (typeof state.onCleanup === 'function') {
-      try { state.onCleanup(); } catch { /* ignore */ }
+      try {
+        state.onCleanup();
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -250,10 +262,12 @@ export class StreamManager {
       this.streams.delete(streamId);
 
       res.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(JSON.stringify({
-        error: 'tunnel_unavailable',
-        message: 'Cannot send request metadata to tunnel client',
-      }));
+      res.end(
+        JSON.stringify({
+          error: 'tunnel_unavailable',
+          message: 'Cannot send request metadata to tunnel client',
+        }),
+      );
       return null;
     }
 
@@ -307,15 +321,15 @@ export class StreamManager {
           const headers = sanitizeHeaders(meta.headers || {}, { removeHost: true });
 
           if (state.req.method === 'HEAD') {
-            delete headers['content-length'];
-            delete headers['transfer-encoding'];
+            headers['content-length'] = undefined;
+            headers['transfer-encoding'] = undefined;
           }
 
           try {
             state.res.writeHead(
               Number(meta.statusCode) || 200,
               typeof meta.statusMessage === 'string' ? meta.statusMessage : '',
-              headers
+              headers,
             );
             state.responseStarted = true;
           } catch {
@@ -400,10 +414,12 @@ export class StreamManager {
                 'Cache-Control': 'no-store',
               });
 
-              state.res.end(JSON.stringify({
-                error: 'tunnel_client_error',
-                message: info.message || 'Tunnel client aborted',
-              }));
+              state.res.end(
+                JSON.stringify({
+                  error: 'tunnel_client_error',
+                  message: info.message || 'Tunnel client aborted',
+                }),
+              );
 
               state.responseEnded = true;
             } catch {
@@ -423,7 +439,8 @@ export class StreamManager {
 
         case PROTO.TYPE.PAUSE: {
           if (state.mode === 'tcp') {
-            state.peerPausedForWrite = true;
+            state.peerPausedRead = true;
+            syncSocketReadState(state, state.socket);
           } else if (state.requestWriter) {
             state.requestWriter.setPeerPaused(true);
           }
@@ -432,7 +449,8 @@ export class StreamManager {
 
         case PROTO.TYPE.RESUME: {
           if (state.mode === 'tcp') {
-            state.peerPausedForWrite = false;
+            state.peerPausedRead = false;
+            syncSocketReadState(state, state.socket);
           } else if (state.requestWriter) {
             state.requestWriter.setPeerPaused(false);
           }
@@ -443,7 +461,11 @@ export class StreamManager {
           if (state.mode !== 'tcp') return;
           if (!state.socket || state.socket.destroyed) return;
           try {
-            state.socket.write(payload);
+            const ok = state.socket.write(payload);
+            if (!ok && !state.localWriteBackpressured) {
+              state.localWriteBackpressured = true;
+              sendFrame(state.ws, FrameCodec.buildFrame(PROTO.TYPE.PAUSE, state.id));
+            }
           } catch {
             this.abortTcpStream(state, 'Failed to write TCP socket', true);
           }
@@ -459,7 +481,11 @@ export class StreamManager {
         case PROTO.TYPE.TCP_ABORT: {
           if (state.mode !== 'tcp') return;
           let info = {};
-          try { info = FrameCodec.parseJsonPayload(payload); } catch { /* ignore */ }
+          try {
+            info = FrameCodec.parseJsonPayload(payload);
+          } catch {
+            /* ignore */
+          }
           this.abortTcpStream(state, info.message || 'Client aborted', false);
           break;
         }

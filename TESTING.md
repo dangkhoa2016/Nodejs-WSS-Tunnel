@@ -66,6 +66,11 @@ node --test test/*.test.js
   node --test test/tcp-router.test.js
   ```
 
+- **TCP Flow Control Tests**:
+  ```bash
+  node --test test/tcp-flow-control.test.js
+  ```
+
 - **TCP End-to-End Tests**:
   ```bash
   node --test test/tcp-e2e.test.js
@@ -188,6 +193,12 @@ Unit tests for `src/ipAllowlist.js`:
 - Exact IP matching, `/32`, `/24`, `/16`, `/0` CIDR matching.
 - IPv4-mapped IPv6 prefix stripping.
 - Multiple allowlist entries, invalid CIDR handling.
+
+### 13. `test/tcp-flow-control.test.js` (Unit Tests)
+Unit tests for TCP flow control coordination in `src/TcpFlowControl.js`:
+- `syncSocketReadState()` coordinates `peerPausedRead` and `localPausedForWs` to decide actual socket pause/resume.
+- Pausing at WS level while peer is already paused keeps socket paused.
+- Resuming at WS level when peer is still paused keeps socket paused.
 
 ---
 

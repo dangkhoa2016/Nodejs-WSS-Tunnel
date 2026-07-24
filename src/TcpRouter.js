@@ -1,19 +1,20 @@
-import net from 'net';
+import net from 'node:net';
+import { syncSocketReadState } from './TcpFlowControl.js';
+import { sendJsonFrame } from './WsFrameWriter.js';
 import {
-  TCP_TUNNEL_HOST,
-  TCP_TUNNEL_PORTS,
-  TCP_TUNNEL_BIND_HOST,
-  TCP_TUNNEL_ALLOWED_IPS,
+  MAX_CONCURRENT_STREAMS,
   TCP_MAX_CONNECTIONS_PER_PORT,
   TCP_SHUTDOWN_DRAIN_TIMEOUT_MS,
-  MAX_CONCURRENT_STREAMS,
+  TCP_TUNNEL_ALLOWED_IPS,
+  TCP_TUNNEL_BIND_HOST,
+  TCP_TUNNEL_HOST,
+  TCP_TUNNEL_PORTS,
   WS_HIGH_WATER,
   WS_LOW_WATER,
 } from './config.js';
-import { PROTO, FrameCodec } from './protocol.js';
-import { sendJsonFrame } from './WsFrameWriter.js';
-import { logStandard, logVerbose } from './logger.js';
 import { isIpAllowed } from './ipAllowlist.js';
+import { logStandard, logVerbose } from './logger.js';
+import { FrameCodec, PROTO } from './protocol.js';
 
 const WS_OPEN = 1;
 
@@ -154,7 +155,7 @@ export class TcpRouter {
             ws.bufferedAmount <= WS_LOW_WATER
           ) {
             state.localPausedForWs = false;
-            socket.resume();
+            syncSocketReadState(state, socket);
           }
         });
       } catch {
@@ -167,7 +168,7 @@ export class TcpRouter {
 
       if (ws.bufferedAmount > WS_HIGH_WATER && !state.localPausedForWs) {
         state.localPausedForWs = true;
-        socket.pause();
+        syncSocketReadState(state, socket);
       }
     });
 

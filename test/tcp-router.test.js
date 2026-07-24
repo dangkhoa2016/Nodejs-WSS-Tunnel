@@ -1,7 +1,8 @@
-import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import net from 'net';
-import { PROTO, FrameCodec } from '../src/protocol.js';
+import net from 'node:net';
+import { afterEach, beforeEach, describe, it } from 'node:test';
+import { syncSocketReadState } from '../src/TcpFlowControl.js';
+import { FrameCodec, PROTO } from '../src/protocol.js';
 
 function mockWs(readyState = 1) {
   const sent = [];
@@ -13,14 +14,20 @@ function mockWs(readyState = 1) {
       sent.push(data);
       if (typeof cb === 'function') cb();
     },
-    _sent() { return sent; },
-    _clear() { sent.length = 0; },
+    _sent() {
+      return sent;
+    },
+    _clear() {
+      sent.length = 0;
+    },
   };
 }
 
 function mockClientManager(ws) {
   return {
-    getActiveClient() { return ws; },
+    getActiveClient() {
+      return ws;
+    },
   };
 }
 
@@ -31,17 +38,20 @@ function mockStreamManager() {
   return {
     streams,
     size: streams.size,
-    allocateStreamId() { return nextId++; },
+    allocateStreamId() {
+      return nextId++;
+    },
     createTcpStream({ ws, socket, serverPort, streamId }) {
       const state = {
-        id: serverPort + '_' + streamId,
+        id: `${serverPort}_${streamId}`,
         ws,
         socket,
         serverPort,
         mode: 'tcp',
         cleaned: false,
         abortSent: false,
-        peerPausedForWrite: false,
+        localWriteBackpressured: false,
+        peerPausedRead: false,
         pendingSends: 0,
         localPausedForWs: false,
         timer: null,
@@ -54,7 +64,10 @@ function mockStreamManager() {
       if (state.cleaned) return;
       state.cleaned = true;
       streams.delete(state.id);
-      if (state.socket) try { state.socket.destroy(); } catch {}
+      if (state.socket)
+        try {
+          state.socket.destroy();
+        } catch {}
       if (typeof state.onCleanup === 'function') state.onCleanup();
     },
     abortTcpStream(state, reason, notifyClient) {
@@ -64,7 +77,9 @@ function mockStreamManager() {
       }
       this.cleanupTcpStream(state);
     },
-    getTcpStreams() { return [...streams.values()].filter((s) => s.mode === 'tcp'); },
+    getTcpStreams() {
+      return [...streams.values()].filter((s) => s.mode === 'tcp');
+    },
   };
 }
 
@@ -93,7 +108,9 @@ describe('TcpRouter (unit)', () => {
 
   afterEach(() => {
     for (const s of servers) {
-      try { s.close(); } catch {}
+      try {
+        s.close();
+      } catch {}
     }
     servers = [];
   });
@@ -126,17 +143,91 @@ describe('TcpRouter (unit)', () => {
     const fakeSocket = {
       remoteAddress: '127.0.0.1',
       remotePort: 55555,
-      destroy() { destroyed = true; },
+      destroy() {
+        destroyed = true;
+      },
       on() {},
       once() {},
       removeListener() {},
       pause() {},
       resume() {},
-      write() { return true; },
+      write() {
+        return true;
+      },
     };
 
     router._handleConnection(fakeSocket, 6379);
     assert.equal(destroyed, true);
+  });
+
+  it('pause reasons coordinate: peer resume alone keeps socket paused', () => {
+    let pauseCalls = 0;
+    let resumeCalls = 0;
+    const mockSocket = {
+      remoteAddress: '127.0.0.1',
+      remotePort: 55555,
+      destroyed: false,
+      pause() {
+        pauseCalls++;
+      },
+      resume() {
+        resumeCalls++;
+      },
+      on() {},
+      once() {},
+      removeListener() {},
+      write() {
+        return true;
+      },
+    };
+
+    const state = {
+      peerPausedRead: true,
+      localPausedForWs: true,
+    };
+
+    state.peerPausedRead = false;
+    syncSocketReadState(state, mockSocket);
+    assert.equal(resumeCalls, 0, 'WS still paused');
+
+    state.localPausedForWs = false;
+    syncSocketReadState(state, mockSocket);
+    assert.equal(resumeCalls, 1, 'both clear');
+  });
+
+  it('pause reasons coordinate: WS release alone keeps socket paused', () => {
+    let pauseCalls = 0;
+    let resumeCalls = 0;
+    const mockSocket = {
+      remoteAddress: '127.0.0.1',
+      remotePort: 55555,
+      destroyed: false,
+      pause() {
+        pauseCalls++;
+      },
+      resume() {
+        resumeCalls++;
+      },
+      on() {},
+      once() {},
+      removeListener() {},
+      write() {
+        return true;
+      },
+    };
+
+    const state = {
+      peerPausedRead: true,
+      localPausedForWs: true,
+    };
+
+    state.localPausedForWs = false;
+    syncSocketReadState(state, mockSocket);
+    assert.equal(resumeCalls, 0, 'peer still paused');
+
+    state.peerPausedRead = false;
+    syncSocketReadState(state, mockSocket);
+    assert.equal(resumeCalls, 1, 'both clear');
   });
 
   it('_handleConnection rejects when per_port_limit reached', async () => {

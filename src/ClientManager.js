@@ -83,7 +83,7 @@ export class ClientManager {
 
     for (const state of all) {
       if (state.ws === ws) {
-        this.streamManager.abortStream(state, 'Tunnel client disconnected', false);
+        this.streamManager.abortAnyStream(state, 'Tunnel client disconnected', false);
       }
     }
   }

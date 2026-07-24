@@ -232,4 +232,37 @@ describe('StreamManager - TCP lifecycle', () => {
       assert.equal(state.peerPausedForWrite, false);
     });
   });
+
+  describe('abortAnyStream with TCP', () => {
+    it('destroys socket and removes from map', () => {
+      const ws = mockWs();
+      const socket = mockSocket();
+      const streamId = sm.allocateStreamId();
+
+      const state = sm.createTcpStream({ ws, socket, serverPort: 9999, streamId });
+      let cleanupCalls = 0;
+      state.onCleanup = () => { cleanupCalls++; };
+
+      sm.abortAnyStream(state, 'test abort', false);
+
+      assert.equal(socket.destroyed, true);
+      assert.equal(cleanupCalls, 1);
+      assert.equal(sm.streams.has(streamId), false);
+    });
+
+    it('notifies client with TCP_ABORT when notifyClient=true', () => {
+      const ws = mockWs();
+      const socket = mockSocket();
+      const streamId = sm.allocateStreamId();
+
+      const state = sm.createTcpStream({ ws, socket, serverPort: 9999, streamId });
+      ws._clear();
+
+      sm.abortAnyStream(state, 'test abort', true);
+
+      const sent = ws._sent();
+      assert.ok(sent.length > 0);
+      assert.equal(sent[0].data[1], PROTO.TYPE.TCP_ABORT);
+    });
+  });
 });

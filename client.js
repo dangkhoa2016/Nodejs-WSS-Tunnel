@@ -614,19 +614,9 @@ function handleReqMeta(currentWs, streamId, payload) {
         sendResAbort(state, 'Response writer error');
       });
 
-      localRes.on('data', (chunk) => {
-        if (state.cleaned) return;
-
-        if (state.responseWriter) {
-          state.responseWriter.write(chunk);
-        }
-      });
-
-      localRes.on('end', () => {
-        if (state.cleaned) return;
-
-        if (state.responseWriter) {
-          state.responseWriter.end();
+      pipeline(localRes, state.responseWriter, (err) => {
+        if (err && !state.cleaned) {
+          sendResAbort(state, `Response pipeline error: ${err.message}`);
         }
       });
     });

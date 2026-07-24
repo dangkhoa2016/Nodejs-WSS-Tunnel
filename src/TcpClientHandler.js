@@ -1,6 +1,7 @@
-import net from 'net';
-import { PROTO } from './protocol.js';
+import net from 'node:net';
+import { syncSocketReadState } from './TcpFlowControl.js';
 import { logVerbose } from './logger.js';
+import { PROTO } from './protocol.js';
 
 const WS_OPEN = 1;
 
@@ -54,7 +55,11 @@ export function createTcpClientHandler(deps) {
     streams.delete(state.id);
 
     if (state.localSocket) {
-      try { state.localSocket.destroy(); } catch { /* ignore */ }
+      try {
+        state.localSocket.destroy();
+      } catch {
+        /* ignore */
+      }
       state.localSocket = null;
     }
   }
@@ -107,7 +112,8 @@ export function createTcpClientHandler(deps) {
       responseEnded: false,
       requestEnded: false,
 
-      peerPausedForWrite: false,
+      localWriteBackpressured: false,
+      peerPausedRead: false,
       timer: null,
     };
 
@@ -129,6 +135,15 @@ export function createTcpClientHandler(deps) {
       resetIdleTimer(state);
 
       logVerbose('tcp', 'local_connected', { streamId, host, port });
+
+      // When local socket buffer drains, resume server traffic.
+      localSocket.on('drain', () => {
+        if (state.cleaned) return;
+        if (state.localWriteBackpressured && currentWs.readyState === WS_OPEN) {
+          state.localWriteBackpressured = false;
+          sendFrame(currentWs, buildFrame(PROTO.TYPE.RESUME, streamId));
+        }
+      });
 
       // Wire the local socket -> WS direction (local socket data -> TCP_DATA frames).
       localSocket.on('data', (chunk) => {
@@ -154,7 +169,7 @@ export function createTcpClientHandler(deps) {
               currentWs.bufferedAmount <= WS_LOW_WATER
             ) {
               state.localPausedForWs = false;
-              localSocket.resume();
+              syncSocketReadState(state, localSocket);
             }
           });
         } catch {
@@ -168,7 +183,7 @@ export function createTcpClientHandler(deps) {
 
         if (currentWs.bufferedAmount > WS_HIGH_WATER && !state.localPausedForWs) {
           state.localPausedForWs = true;
-          localSocket.pause();
+          syncSocketReadState(state, localSocket);
         }
       });
     });
@@ -208,7 +223,11 @@ export function createTcpClientHandler(deps) {
     resetIdleTimer(state);
 
     try {
-      state.localSocket.write(payload);
+      const ok = state.localSocket.write(payload);
+      if (!ok && !state.localWriteBackpressured) {
+        state.localWriteBackpressured = true;
+        sendFrame(state.ws, buildFrame(PROTO.TYPE.PAUSE, state.id));
+      }
     } catch (err) {
       logVerbose('tcp', 'write_error', { streamId: state.id, error: err.message });
       sendTcpAbort(state.ws, state.id, 'Failed to write to local socket');
@@ -225,7 +244,11 @@ export function createTcpClientHandler(deps) {
     if (state.mode !== 'tcp') return;
 
     let info = {};
-    try { info = parseJsonPayload(payload); } catch { /* ignore */ }
+    try {
+      info = parseJsonPayload(payload);
+    } catch {
+      /* ignore */
+    }
 
     logVerbose('tcp', 'remote_abort', { streamId: state.id, message: info.message });
     cleanupTcpState(state);
@@ -262,15 +285,17 @@ export function createTcpClientHandler(deps) {
         handleTcpAbort(state, payload);
         return true;
       case PROTO.TYPE.PAUSE:
-        if (state && state.responseWriter) state.responseWriter.setPeerPaused(true);
-        if (state && state.mode === 'tcp' && state.localSocket && !state.localSocket.destroyed) {
-          state.localSocket.pause();
+        if (state?.responseWriter) state.responseWriter.setPeerPaused(true);
+        if (state && state.mode === 'tcp') {
+          state.peerPausedRead = true;
+          syncSocketReadState(state, state.localSocket);
         }
         return true;
       case PROTO.TYPE.RESUME:
-        if (state && state.responseWriter) state.responseWriter.setPeerPaused(false);
-        if (state && state.mode === 'tcp' && state.localSocket && !state.localSocket.destroyed) {
-          state.localSocket.resume();
+        if (state?.responseWriter) state.responseWriter.setPeerPaused(false);
+        if (state && state.mode === 'tcp') {
+          state.peerPausedRead = false;
+          syncSocketReadState(state, state.localSocket);
         }
         return true;
       default:

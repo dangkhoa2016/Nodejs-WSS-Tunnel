@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_ENV: test
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn lint
+      - run: yarn build:client
+      - name: Verify bundle is standalone
+        run: |
+          SANDBOX=$(mktemp -d)
+          cp dist/client.js "$SANDBOX/"
+          cd "$SANDBOX"
+          echo '{"type":"module","dependencies":{"ws":"^8.21.1"}}' > package.json
+          npm install --silent
+          node --check client.js
+          node -e "import('./client.js').catch(e => console.log('OK:', e.message))" 2>&1 | grep 'TUNNEL_SERVER_URL'
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node-version: [20, 22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: NODE_ENV=test node --test --test-timeout=120000 test/*.test.js
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.node-version }}
+          path: /tmp/test-output.log
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn npm audit --all
+        continue-on-error: true
+
+  installer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn build:client
+      - name: Start server
+        run: |
+          TUNNEL_USERNAME=admin TUNNEL_PASSWORD=secret \
+          node src/index.js &
+          SERVER_PID=$!
+          echo "$SERVER_PID" > /tmp/server.pid
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:7860/__health > /dev/null 2>&1; then
+              echo "Server ready"
+              break
+            fi
+            sleep 0.5
+          done
+      - name: Test artifact routes
+        run: |
+          curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
+          node --check /tmp/client.js
+          curl -sf http://127.0.0.1:7860/client-package.json -o /tmp/pkg.json
+          node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/pkg.json','utf8')).name)"
+          echo "Artifacts OK"
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f /tmp/server.pid ]; then
+            kill $(cat /tmp/server.pid) 2>/dev/null || true
+          fi

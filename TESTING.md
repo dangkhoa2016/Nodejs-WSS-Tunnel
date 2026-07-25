@@ -71,6 +71,11 @@ node --test test/*.test.js
   node --test test/tcp-flow-control.test.js
   ```
 
+- **Installer Unit Tests**:
+  ```bash
+  node --test test/installer.test.js
+  ```
+
 - **TCP End-to-End Tests**:
   ```bash
   node --test test/tcp-e2e.test.js
@@ -199,6 +204,12 @@ Unit tests for TCP flow control coordination in `src/TcpFlowControl.js`:
 - `syncSocketReadState()` coordinates `peerPausedRead` and `localPausedForWs` to decide actual socket pause/resume.
 - Pausing at WS level while peer is already paused keeps socket paused.
 - Resuming at WS level when peer is still paused keeps socket paused.
+
+### 15. `test/installer.test.js` (Unit Tests)
+Unit tests for `serve/setup.sh` installer script:
+- **Invalid bundle cleanup**: Bundles that fail `node --check` are cleaned up.
+- **Stale readiness rejection**: If `client.ready` exists before the client starts, the installer rejects with a clear error.
+- **Success path**: A valid client binary is downloaded, started, and the `pid` file is written.
 
 ---
 

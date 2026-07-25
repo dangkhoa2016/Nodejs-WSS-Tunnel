@@ -1,0 +1,51 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "organizeImports": {
+    "enabled": true
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noNonNullAssertion": "off"
+      },
+      "complexity": {
+        "noBannedTypes": "off",
+        "noStaticOnlyClass": "off"
+      },
+      "suspicious": {
+        "noAsyncPromiseExecutor": "off",
+        "noAssignInExpressions": "off"
+      },
+      "performance": {
+        "noDelete": "off"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "files": {
+    "include": [
+      "src/**/*.js",
+      "serve/**/*.js",
+      "serve/**/*.sh",
+      "test/**/*.js",
+      "client.js",
+      "biome.json",
+      "package.json"
+    ],
+    "ignore": ["dist/", "node_modules/", ".yarn/", "temp/", "coverage/"]
+  }
+}

@@ -71,6 +71,11 @@ node --test test/*.test.js
   node --test test/tcp-flow-control.test.js
   ```
 
+- **Kiểm thử Installer (Unit)**:
+  ```bash
+  node --test test/installer.test.js
+  ```
+
 - **Kiểm thử TCP End-to-End**:
   ```bash
   node --test test/tcp-e2e.test.js
@@ -199,6 +204,12 @@ Kiểm thử đơn vị cho điều phối flow control TCP trong `src/TcpFlowCo
 - `syncSocketReadState()` phối hợp `peerPausedRead` và `localPausedForWs` quyết định pause/resume socket thực tế.
 - Pause ở WS trong khi peer đã pause giữ socket ở trạng thái pause.
 - Resume ở WS trong khi peer vẫn pause giữ socket ở trạng thái pause.
+
+### 15. `test/installer.test.js` (Unit Tests)
+Kiểm thử đơn vị cho script cài đặt `serve/setup.sh`:
+- **Dọn dẹp bundle lỗi**: Bundle không qua `node --check` được dọn dẹp.
+- **Từ chối stale readiness**: Nếu `client.ready` tồn tại trước khi client chạy, báo lỗi rõ ràng.
+- **Luồng thành công**: Client binary hợp lệ được tải về, khởi chạy, và file `pid` được ghi.
 
 ---
 

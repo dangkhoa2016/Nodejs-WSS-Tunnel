@@ -1,14 +1,16 @@
-import http from 'http';
-import https from 'https';
-import { URL } from 'url';
-import { pipeline } from 'stream';
+import http from 'node:http';
+import https from 'node:https';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pipeline } from 'node:stream';
+import { URL } from 'node:url';
 
 import WebSocket from 'ws';
 
-import { PROTO, FrameCodec } from './src/protocol.js';
-import { sendFrame, sendJsonFrame, WsFrameWriter } from './src/WsFrameWriter.js';
-import { sanitizeHeaders } from './src/utils.js';
-import { createTcpClientHandler } from './src/TcpClientHandler.js';
+import { createTcpClientHandler } from '../src/TcpClientHandler.js';
+import { WsFrameWriter, sendFrame, sendJsonFrame } from '../src/WsFrameWriter.js';
+import { FrameCodec, PROTO } from '../src/protocol.js';
+import { sanitizeHeaders } from '../src/utils.js';
 
 if (process.env.NODE_ENV === 'development') {
   try {
@@ -338,9 +340,7 @@ function handleReqMeta(currentWs, streamId, payload) {
 
     const targetUrl = new URL(TARGET_ORIGIN);
 
-    const basePath = targetBase.pathname === '/'
-      ? ''
-      : targetBase.pathname.replace(/\/$/, '');
+    const basePath = targetBase.pathname === '/' ? '' : targetBase.pathname.replace(/\/$/, '');
 
     targetUrl.pathname = basePath + pathname;
     targetUrl.search = search;
@@ -467,7 +467,7 @@ function connect() {
 
   ws = new WebSocket(wsUrl.href, {
     headers: {
-      Authorization: 'Basic ' + Buffer.from(`${USERNAME}:${PASSWORD}`).toString('base64'),
+      Authorization: `Basic ${Buffer.from(`${USERNAME}:${PASSWORD}`).toString('base64')}`,
     },
     handshakeTimeout: 10000,
   });
@@ -476,6 +476,19 @@ function connect() {
     console.log('[client] Connected to tunnel server');
     reconnectDelay = 1000;
     authFailed = false;
+
+    // Signal readiness for installer polling
+    const readyFile =
+      process.env.TUNNEL_READY_FILE ||
+      join(
+        process.env.TUNNEL_WORK_DIR || (process.env.HOME ? join(process.env.HOME, '.tunnel-client') : '.'),
+        'client.ready',
+      );
+    try {
+      writeFileSync(readyFile, String(process.pid));
+    } catch {
+      // non-fatal; installer will time out if readiness cannot be written
+    }
 
     // Start heartbeat
     heartbeatInterval = setInterval(() => {

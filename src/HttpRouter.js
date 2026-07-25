@@ -132,7 +132,7 @@ export class HttpRouter {
     }
 
     if (pathname === `/${INSTALL_UUID}-install`) {
-      this._serveFile(res, path.join(PROJECT_ROOT, 'setup.sh'), 'application/x-sh');
+      this._serveFile(res, path.join(PROJECT_ROOT, 'serve', 'setup.sh'), 'application/x-sh');
       return;
     }
 
@@ -142,12 +142,12 @@ export class HttpRouter {
     }
 
     if (pathname === '/client.js') {
-      this._serveFile(res, path.join(PROJECT_ROOT, 'client.js'), 'application/javascript; charset=utf-8');
+      this._serveFile(res, path.join(PROJECT_ROOT, 'dist', 'client.js'), 'application/javascript; charset=utf-8');
       return;
     }
 
-    if (pathname === '/package.json') {
-      this._serveFile(res, path.join(PROJECT_ROOT, 'package.json'), 'application/json; charset=utf-8');
+    if (pathname === '/client-package.json') {
+      this._serveFile(res, path.join(PROJECT_ROOT, 'serve', 'client-package.json'), 'application/json; charset=utf-8');
       return;
     }
 

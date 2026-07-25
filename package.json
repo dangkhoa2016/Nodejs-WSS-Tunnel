@@ -7,13 +7,15 @@
   "scripts": {
     "prod": "NODE_ENV=production node src/index.js",
     "dev": "NODE_ENV=development node src/index.js",
-    "test": "NODE_ENV=test node --test --test-force-exit test/*.test.js"
+    "test": "NODE_ENV=test node --test --test-force-exit test/*.test.js",
+    "build:client": "node serve/build.js"
   },
   "packageManager": "yarn@4.17.1",
   "dependencies": {
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "esbuild": "^0.25.0"
   }
 }

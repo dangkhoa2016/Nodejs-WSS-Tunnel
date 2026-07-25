@@ -8,13 +8,18 @@
     "prod": "NODE_ENV=production node src/index.js",
     "dev": "NODE_ENV=development node src/index.js",
     "test": "NODE_ENV=test node --test --test-force-exit test/*.test.js",
-    "build:client": "node serve/build.js"
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "build:client": "node serve/build.js",
+    "check": "yarn lint && yarn test && yarn build:client"
   },
   "packageManager": "yarn@4.17.1",
   "dependencies": {
     "ws": "^8.21.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
     "dotenv": "^17.4.2",
     "esbuild": "^0.25.0"
   }

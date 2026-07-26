@@ -106,4 +106,29 @@ export async function createEchoServer() {
   };
 }
 
+export function canConnect(host, port, { timeout = 1000, attempts = 6, retryDelay = 500 } = {}) {
+  return new Promise((resolve) => {
+    let remaining = attempts;
+    const tryOnce = () => {
+      const socket = new net.Socket();
+      let settled = false;
+      const settle = (ok) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        if (ok) return resolve(true);
+        remaining -= 1;
+        if (remaining > 0) return setTimeout(tryOnce, retryDelay);
+        resolve(false);
+      };
+      socket.setTimeout(timeout);
+      socket.once('connect', () => settle(true));
+      socket.once('error', () => settle(false));
+      socket.once('timeout', () => settle(false));
+      socket.connect(port, host);
+    };
+    tryOnce();
+  });
+}
+
 export { PROTO, sleep, FrameCodec };

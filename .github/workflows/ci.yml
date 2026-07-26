@@ -76,7 +76,48 @@ jobs:
       - name: Check dependencies for known advisories
         run: yarn npm audit --all
 
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t tunnel-server .
+      - name: Start container and verify health
+        run: |
+          docker run --rm -d -p 7860:7860 \
+            -e TUNNEL_USERNAME=admin \
+            -e TUNNEL_PASSWORD=secret \
+            -e SERVER_HOST=http://127.0.0.1:7860 \
+            --name tunnel-server-test \
+            tunnel-server
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:7860/__health > /dev/null 2>&1; then
+              echo "Container ready"
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:7860/__health | grep -q ok || exit 1
+      - name: Verify artifact routes served from container
+        run: |
+          curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
+          node --check /tmp/client.js
+          curl -sf http://127.0.0.1:7860/client-package.json | grep -q 'tunnel-client'
+      - name: Run installer from container artifacts
+        run: |
+          TMPDIR=$(mktemp -d)
+          HOME="$TMPDIR" \
+          TUNNEL_SERVER_URL=ws://127.0.0.1:7860/tunnel \
+          TUNNEL_USERNAME=admin \
+          TUNNEL_PASSWORD=secret \
+          TARGET_ORIGIN=http://127.0.0.1:8080 \
+            bash serve/setup.sh 2>&1
+      - name: Stop container
+        if: always()
+        run: docker stop tunnel-server-test || true
+
   installer:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -87,7 +128,7 @@ jobs:
       - run: corepack enable
       - run: yarn install --immutable
       - run: yarn build:client
-      - name: Start server with deterministic UUID
+      - name: Start server
         run: |
           TUNNEL_USERNAME=admin TUNNEL_PASSWORD=secret \
           INSTALL_UUID=ci-install \
@@ -103,7 +144,7 @@ jobs:
             sleep 0.5
           done
           curl -fsS http://127.0.0.1:7860/__health || exit 1
-      - name: Test artifact routes
+      - name: Verify artifact routes
         run: |
           curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
           node --check /tmp/client.js
@@ -112,24 +153,25 @@ jobs:
             const p = JSON.parse(require('fs').readFileSync('/tmp/pkg.json','utf8'));
             console.log('Manifest:', p.name);
           "
-          echo "Artifacts OK"
-      - name: Run installer in temp HOME
+      - name: Run installer
         run: |
           SANDBOX=$(mktemp -d)
           HOME="$SANDBOX" \
-          TUNNEL_SERVER_URL=wss://127.0.0.1:7860/tunnel \
+          TUNNEL_SERVER_URL=ws://127.0.0.1:7860/tunnel \
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
-            bash -c "
-              cd /tmp
-              mkdir -p \$HOME
-              cat serve/setup.sh | sed 's|read -rp.*</dev/tty||' > /tmp/installer.sh
-              echo '' > /tmp/auto_input
-              exec < /tmp/auto_input
-              source /tmp/installer.sh
-            " 2>&1 || true
-          ls -la "$SANDBOX/.tunnel-client/" 2>/dev/null
+            bash serve/setup.sh 2>&1
+          ls -la "$SANDBOX/.tunnel-client/"
+      - name: Verify client connects
+        run: |
+          node -e "
+            const { WebSocket } = require('ws');
+            const ws = new WebSocket('ws://admin:secret@127.0.0.1:7860/tunnel');
+            ws.on('open', () => { console.log('CLIENT CONNECTED'); ws.close(); process.exit(0); });
+            ws.on('error', (e) => { console.error('CONNECT ERROR:', e.message); process.exit(1); });
+            setTimeout(() => { console.error('TIMEOUT'); process.exit(1); }, 5000);
+          "
       - name: Cleanup
         if: always()
         run: |

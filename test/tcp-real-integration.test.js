@@ -1,9 +1,12 @@
-import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { PROTO, FrameCodec } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/protocol.js';
+import { canConnect } from './helpers/tcp-test-setup.js';
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function setupPair(port) {
   return new Promise(async (resolve) => {
@@ -22,9 +25,13 @@ function setupPair(port) {
       TCP_CONNECT_TIMEOUT_MS: 5000,
       WS_HIGH_WATER: 1024 * 1024,
       WS_LOW_WATER: 512 * 1024,
-      sendFrame: (ws, frame) => { if (ws.readyState === 1) ws.send(frame, { binary: true }); return true; },
+      sendFrame: (ws, frame) => {
+        if (ws.readyState === 1) ws.send(frame, { binary: true });
+        return true;
+      },
       sendJsonFrame: (ws, type, streamId, obj) => {
-        if (ws.readyState === 1) ws.send(FrameCodec.buildFrame(type, streamId, Buffer.from(JSON.stringify(obj))), { binary: true });
+        if (ws.readyState === 1)
+          ws.send(FrameCodec.buildFrame(type, streamId, Buffer.from(JSON.stringify(obj))), { binary: true });
         return true;
       },
       buildFrame: FrameCodec.buildFrame,
@@ -38,7 +45,10 @@ function setupPair(port) {
     await new Promise((r) => wss.on('listening', r));
 
     let serverWs = null;
-    wss.on('connection', (ws) => { serverWs = ws; ws.binaryType = 'nodebuffer'; });
+    wss.on('connection', (ws) => {
+      serverWs = ws;
+      ws.binaryType = 'nodebuffer';
+    });
 
     const clientWs = new WebSocket(`ws://127.0.0.1:${port}`);
     clientWs.binaryType = 'nodebuffer';
@@ -61,7 +71,11 @@ function setupPair(port) {
     clientWs.on('message', (data, isBinary) => {
       if (!isBinary) return;
       let frame;
-      try { frame = FrameCodec.parseFrame(data); } catch { return; }
+      try {
+        frame = FrameCodec.parseFrame(data);
+      } catch {
+        return;
+      }
       tcpHandler.handleServerFrame(frame.type, clientWs, frame.streamId, frame.payload, streams.get(frame.streamId));
     });
 
@@ -70,7 +84,9 @@ function setupPair(port) {
 }
 
 function openTunnel(serverWs, id, port) {
-  serverWs.send(FrameCodec.buildFrame(PROTO.TYPE.TCP_OPEN, id, Buffer.from(JSON.stringify({ host: '127.0.0.1', port }))));
+  serverWs.send(
+    FrameCodec.buildFrame(PROTO.TYPE.TCP_OPEN, id, Buffer.from(JSON.stringify({ host: '127.0.0.1', port }))),
+  );
 }
 
 function sendData(serverWs, id, data) {
@@ -85,12 +101,18 @@ function getDataFrames(received, streamId) {
   return received.filter((f) => f.type === PROTO.TYPE.TCP_DATA && f.streamId === streamId);
 }
 
-describe('Real TCP Integration Tests', () => {
+const REDIS_PORT = 6379;
+const PG_PORT = 5432;
 
-  it('Redis: PING/PONG', { timeout: 10000 }, async () => {
+describe('Real TCP Integration Tests', () => {
+  it('Redis: PING/PONG', { timeout: 10000 }, async (t) => {
+    if (!(await canConnect('127.0.0.1', REDIS_PORT))) {
+      t.skip('Redis not available on port ' + REDIS_PORT);
+      return;
+    }
     const { serverWs, cleanup, received } = await setupPair(25379);
     try {
-      openTunnel(serverWs, 1, 6379);
+      openTunnel(serverWs, 1, REDIS_PORT);
       await sleep(500);
 
       sendData(serverWs, 1, '*1\r\n$4\r\nPING\r\n');
@@ -108,10 +130,14 @@ describe('Real TCP Integration Tests', () => {
     }
   });
 
-  it('Redis: SET/GET/DEL', { timeout: 10000 }, async () => {
+  it('Redis: SET/GET/DEL', { timeout: 10000 }, async (t) => {
+    if (!(await canConnect('127.0.0.1', REDIS_PORT))) {
+      t.skip('Redis not available on port ' + REDIS_PORT);
+      return;
+    }
     const { serverWs, cleanup, received } = await setupPair(25380);
     try {
-      openTunnel(serverWs, 2, 6379);
+      openTunnel(serverWs, 2, REDIS_PORT);
       await sleep(500);
 
       sendData(serverWs, 2, '*3\r\n$3\r\nSET\r\n$11\r\ntun-testkey\r\n$13\r\ntunnel-value!\r\n');
@@ -133,10 +159,14 @@ describe('Real TCP Integration Tests', () => {
     }
   });
 
-  it('Postgres: TCP connect through tunnel', { timeout: 10000 }, async () => {
+  it('Postgres: TCP connect through tunnel', { timeout: 10000 }, async (t) => {
+    if (!(await canConnect('127.0.0.1', PG_PORT))) {
+      t.skip('Postgres not available on port ' + PG_PORT);
+      return;
+    }
     const { serverWs, cleanup, streams } = await setupPair(25381);
     try {
-      openTunnel(serverWs, 3, 5432);
+      openTunnel(serverWs, 3, PG_PORT);
       await sleep(500);
 
       const state = streams.get(3);
@@ -152,11 +182,15 @@ describe('Real TCP Integration Tests', () => {
     }
   });
 
-  it('concurrent: 5 parallel Redis PINGs', { timeout: 10000 }, async () => {
+  it('concurrent: 5 parallel Redis PINGs', { timeout: 10000 }, async (t) => {
+    if (!(await canConnect('127.0.0.1', REDIS_PORT))) {
+      t.skip('Redis not available on port ' + REDIS_PORT);
+      return;
+    }
     const { serverWs, cleanup, received } = await setupPair(25382);
     try {
       for (let i = 0; i < 5; i++) {
-        openTunnel(serverWs, 10 + i, 6379);
+        openTunnel(serverWs, 10 + i, REDIS_PORT);
       }
       await sleep(500);
 

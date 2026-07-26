@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: corepack enable
@@ -38,48 +38,60 @@ jobs:
     strategy:
       matrix:
         node-version: [20, 22, 24]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tunnel
+          POSTGRES_PASSWORD: tunnel
+          POSTGRES_DB: tunnel
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U tunnel" --health-interval 5s --health-timeout 3s --health-retries 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
       - run: corepack enable
       - run: yarn install --immutable
+      - run: yarn build:client
       - run: NODE_ENV=test node --test --test-timeout=120000 test/*.test.js
-      - name: Upload test log on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-output-${{ matrix.node-version }}
-          path: /tmp/test-output.log
 
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: corepack enable
       - run: yarn install --immutable
-      - run: yarn npm audit --all
-        continue-on-error: true
+      - name: Check dependencies for known advisories
+        run: yarn npm audit --all
 
   installer:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: corepack enable
       - run: yarn install --immutable
       - run: yarn build:client
-      - name: Start server
+      - name: Start server with deterministic UUID
         run: |
           TUNNEL_USERNAME=admin TUNNEL_PASSWORD=secret \
+          INSTALL_UUID=ci-install \
+          SERVER_HOST=http://127.0.0.1:7860 \
           node src/index.js &
           SERVER_PID=$!
           echo "$SERVER_PID" > /tmp/server.pid
@@ -90,13 +102,34 @@ jobs:
             fi
             sleep 0.5
           done
+          curl -fsS http://127.0.0.1:7860/__health || exit 1
       - name: Test artifact routes
         run: |
           curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
           node --check /tmp/client.js
           curl -sf http://127.0.0.1:7860/client-package.json -o /tmp/pkg.json
-          node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/pkg.json','utf8')).name)"
+          node -e "
+            const p = JSON.parse(require('fs').readFileSync('/tmp/pkg.json','utf8'));
+            console.log('Manifest:', p.name);
+          "
           echo "Artifacts OK"
+      - name: Run installer in temp HOME
+        run: |
+          SANDBOX=$(mktemp -d)
+          HOME="$SANDBOX" \
+          TUNNEL_SERVER_URL=wss://127.0.0.1:7860/tunnel \
+          TUNNEL_USERNAME=admin \
+          TUNNEL_PASSWORD=secret \
+          TARGET_ORIGIN=http://127.0.0.1:8080 \
+            bash -c "
+              cd /tmp
+              mkdir -p \$HOME
+              cat serve/setup.sh | sed 's|read -rp.*</dev/tty||' > /tmp/installer.sh
+              echo '' > /tmp/auto_input
+              exec < /tmp/auto_input
+              source /tmp/installer.sh
+            " 2>&1 || true
+          ls -la "$SANDBOX/.tunnel-client/" 2>/dev/null
       - name: Cleanup
         if: always()
         run: |

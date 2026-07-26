@@ -81,6 +81,11 @@ node --test test/*.test.js
   node --test test/installer.test.js
   ```
 
+- **Kiểm thử Installer End-to-End** (cần build `dist/client.js` trước):
+  ```bash
+  node --test test/installer-e2e.test.js
+  ```
+
 - **Kiểm thử TCP End-to-End**:
   ```bash
   node --test test/tcp-e2e.test.js
@@ -222,6 +227,12 @@ Kiểm thử đơn vị cho script cài đặt `serve/setup.sh`:
 - **Dọn dẹp bundle lỗi**: Bundle không qua `node --check` được dọn dẹp.
 - **Từ chối stale readiness**: Nếu `client.ready` tồn tại trước khi client chạy, báo lỗi rõ ràng.
 - **Luồng thành công**: Client binary hợp lệ được tải về, khởi chạy, và file `pid` được ghi.
+
+### 16. `test/installer-e2e.test.js` (End-to-End Test)
+Kiểm thử E2E đầy đủ, build `dist/client.js` thật, chạy tunnel server, và kiểm tra trình cài đặt:
+- **Cài đặt lần đầu**: Tải bundle, khởi chạy client, xác minh PID còn sống.
+- **Cài đặt nâng cấp**: Chạy lại installer cùng thư mục làm việc; xác minh PID thay đổi và symlink `previous` được tạo.
+- **Rollback**: Cài đặt bundle lỗi và xác minh installer quay về bản trước đó và tiếp tục phục vụ tunnel HTTP.
 
 ---
 

@@ -1,12 +1,28 @@
-import http from 'http';
-import { PORT, TUNNEL_PATH, SERVER_HOST, INSTALL_UUID, WS_MAX_PAYLOAD, validateConfig } from './config.js';
-import { verifyBasicAuth } from './utils.js';
+import http from 'node:http';
 import { WebSocketServer } from 'ws';
-import { StreamManager } from './StreamManager.js';
 import { ClientManager } from './ClientManager.js';
 import { HttpRouter } from './HttpRouter.js';
+import { StreamManager } from './StreamManager.js';
 import { TcpRouter } from './TcpRouter.js';
-import { logStandard, logVerbose } from './logger.js';
+import { INSTALL_UUID, PORT, SERVER_HOST, TUNNEL_PATH, WS_MAX_PAYLOAD, validateConfig } from './config.js';
+import { logError, logStandard, logVerbose } from './logger.js';
+
+const GRACEFUL_TIMEOUT_MS = 10_000;
+
+function closeWithCallback(component) {
+  if (!component) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    try {
+      component.close((error) => {
+        if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+        else resolve();
+      });
+    } catch (error) {
+      if (error?.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+      else reject(error);
+    }
+  });
+}
 
 export class TunnelServer {
   constructor() {
@@ -17,6 +33,33 @@ export class TunnelServer {
 
     this._server = null;
     this._wss = null;
+    this._shuttingDown = false;
+    this._closePromise = null;
+  }
+
+  close() {
+    if (this._closePromise) return this._closePromise;
+    this._shuttingDown = true;
+    this._closePromise = this._closeComponents();
+    return this._closePromise;
+  }
+
+  async _closeComponents() {
+    const results = await Promise.allSettled([
+      this.tcpRouter.close(),
+      this.clientManager.close(),
+      closeWithCallback(this._server),
+      closeWithCallback(this._wss),
+    ]);
+
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        const reasons = r.reason?.errors?.length
+          ? r.reason.errors.map((e) => e.message || String(e))
+          : [r.reason?.message || String(r.reason)];
+        logError('shutdown', 'close_error', { errors: reasons });
+      }
+    }
   }
 
   start() {
@@ -122,36 +165,34 @@ export class TunnelServer {
   }
 
   _setupProcessHandlers() {
-    process.on('SIGTERM', async () => {
-      console.log('[server] SIGTERM received, shutting down...');
-
-      this.clientManager.stopHeartbeat();
-
-      try {
-        await this.tcpRouter.close();
-      } catch {
-        // ignore
+    const shutdown = async (signal) => {
+      if (this._shuttingDown) return;
+      if (signal) {
+        logStandard('shutdown', 'signal', { signal });
       }
 
-      try {
-        this._wss.close();
-      } catch {
-        // ignore
-      }
+      const timer = setTimeout(() => {
+        process.exit(1);
+      }, GRACEFUL_TIMEOUT_MS).unref();
 
-      this._server.close(() => {
-        process.exit(0);
-      });
+      await this.close();
 
-      setTimeout(() => process.exit(0), 5000).unref();
-    });
+      clearTimeout(timer);
+      process.exit(signal === 'uncaughtException' ? 1 : 0);
+    };
+
+    for (const sig of ['SIGTERM', 'SIGINT']) {
+      process.on(sig, () => shutdown(sig));
+    }
 
     process.on('uncaughtException', (err) => {
-      console.error('[server] uncaughtException:', err);
+      logError('shutdown', 'uncaught_exception', { error: err?.message || String(err) });
+      this._server?.close();
+      shutdown('uncaughtException');
     });
 
     process.on('unhandledRejection', (reason) => {
-      console.error('[server] unhandledRejection:', reason);
+      logError('shutdown', 'unhandled_rejection', { error: reason?.message || String(reason) });
     });
   }
 }

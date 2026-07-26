@@ -202,13 +202,22 @@ export class TcpRouter {
   }
 
   async close() {
+    const closePromises = [];
     for (const [port, server] of this._servers) {
-      try {
-        server.close();
-        logStandard('tcp', 'stop_accepting', { port });
-      } catch {
-        // ignore
-      }
+      closePromises.push(
+        new Promise((resolve, reject) => {
+          try {
+            server.close((error) => {
+              if (error && error.code !== 'ERR_SERVER_NOT_RUNNING') reject(error);
+              else resolve();
+            });
+            logStandard('tcp', 'stop_accepting', { port });
+          } catch (error) {
+            if (error?.code === 'ERR_SERVER_NOT_RUNNING') resolve();
+            else reject(error);
+          }
+        }),
+      );
     }
     this._servers.clear();
 
@@ -218,6 +227,11 @@ export class TcpRouter {
     }
     if (activeStates.length > 0) {
       await new Promise((resolve) => setTimeout(resolve, TCP_SHUTDOWN_DRAIN_TIMEOUT_MS));
+    }
+    const results = await Promise.allSettled(closePromises);
+    const failures = results.filter((result) => result.status === 'rejected').map((result) => result.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Failed to close TCP listeners');
     }
   }
 }

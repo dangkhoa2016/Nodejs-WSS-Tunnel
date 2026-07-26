@@ -81,6 +81,11 @@ node --test test/*.test.js
   node --test test/installer.test.js
   ```
 
+- **Installer End-to-End Tests** (builds real client bundle, requires `yarn build:client`):
+  ```bash
+  node --test test/installer-e2e.test.js
+  ```
+
 - **TCP End-to-End Tests**:
   ```bash
   node --test test/tcp-e2e.test.js
@@ -222,6 +227,12 @@ Unit tests for `serve/setup.sh` installer script:
 - **Invalid bundle cleanup**: Bundles that fail `node --check` are cleaned up.
 - **Stale readiness rejection**: If `client.ready` exists before the client starts, the installer rejects with a clear error.
 - **Success path**: A valid client binary is downloaded, started, and the `pid` file is written.
+
+### 16. `test/installer-e2e.test.js` (End-to-End Test)
+Full E2E test that builds a real `dist/client.js` bundle, runs the tunnel server, and tests the installer workflow:
+- **First install**: Downloads the bundle, starts the client, verifies PID is alive.
+- **Upgrade install**: Runs installer again with the same work directory; verifies PID changes and `previous` symlink is created.
+- **Rollback**: Installs a broken client bundle and verifies the installer rolls back to the previous release and continues serving tunneled HTTP requests.
 
 ---
 

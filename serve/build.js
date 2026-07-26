@@ -1,8 +1,13 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 
+const serveDir = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(serveDir, '..');
+
 await esbuild.build({
-  entryPoints: ['client.js'],
-  outfile: 'dist/client.js',
+  entryPoints: [path.join(serveDir, 'client.js')],
+  outfile: path.join(root, 'dist', 'client.js'),
   bundle: true,
   platform: 'node',
   format: 'esm',

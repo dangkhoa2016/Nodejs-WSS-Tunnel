@@ -71,6 +71,11 @@ node --test test/*.test.js
   node --test test/tcp-flow-control.test.js
   ```
 
+- **Kiểm thử Graceful Shutdown**:
+  ```bash
+  node --test test/shutdown.test.js
+  ```
+
 - **Kiểm thử Installer (Unit)**:
   ```bash
   node --test test/installer.test.js
@@ -204,6 +209,13 @@ Kiểm thử đơn vị cho điều phối flow control TCP trong `src/TcpFlowCo
 - `syncSocketReadState()` phối hợp `peerPausedRead` và `localPausedForWs` quyết định pause/resume socket thực tế.
 - Pause ở WS trong khi peer đã pause giữ socket ở trạng thái pause.
 - Resume ở WS trong khi peer vẫn pause giữ socket ở trạng thái pause.
+
+### 14. `test/shutdown.test.js` (Integration Tests)
+Kiểm thử tích hợp cho graceful shutdown trong `src/index.js`:
+- `close()` trả về một promise duy nhất cho nhiều caller đồng thời.
+- HTTP server ngừng chấp nhận kết nối mới.
+- WebSocket connections được thoát với timeout 5 giây.
+- Cleanup không bị treo quá timeout.
 
 ### 15. `test/installer.test.js` (Unit Tests)
 Kiểm thử đơn vị cho script cài đặt `serve/setup.sh`:

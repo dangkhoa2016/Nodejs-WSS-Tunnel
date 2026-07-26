@@ -1,14 +1,26 @@
-import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTO, FrameCodec, sleep, setupTcpPair } from './helpers/tcp-test-setup.js';
+import { describe, it } from 'node:test';
+import { FrameCodec, PROTO, createEchoServer, setupTcpPair, sleep } from './helpers/tcp-test-setup.js';
 
 describe('WS disconnect cleanup', () => {
   it('cleanupTcpStreams destroys all TCP streams', { timeout: 10000 }, async () => {
-    const { serverWs, cleanup, streams, tcpHandler } = await setupTcpPair({ port: 25420 });
-
+    let echo;
+    let cleanup;
+    let serverWs;
+    let streams;
+    let tcpHandler;
     try {
+      echo = await createEchoServer();
+      ({ serverWs, cleanup, streams, tcpHandler } = await setupTcpPair({ port: 25420 }));
+
       for (let i = 0; i < 3; i++) {
-        serverWs.send(FrameCodec.buildFrame(PROTO.TYPE.TCP_OPEN, 50 + i, Buffer.from(JSON.stringify({ host: '127.0.0.1', port: 6379 }))));
+        serverWs.send(
+          FrameCodec.buildFrame(
+            PROTO.TYPE.TCP_OPEN,
+            50 + i,
+            Buffer.from(JSON.stringify({ host: '127.0.0.1', port: echo.port })),
+          ),
+        );
       }
       await sleep(500);
 
@@ -18,17 +30,30 @@ describe('WS disconnect cleanup', () => {
 
       assert.equal(streams.size, 0, 'all TCP streams should be cleaned up');
     } finally {
-      for (const fn of cleanup.reverse()) fn();
+      if (cleanup) for (const fn of cleanup.reverse()) fn();
+      if (echo) await echo.close();
     }
   });
 
   it('TCP streams cleaned up on rapid open/close', { timeout: 10000 }, async () => {
-    const { serverWs, cleanup, streams, tcpHandler } = await setupTcpPair({ port: 25421 });
-
+    let echo;
+    let cleanup;
+    let serverWs;
+    let streams;
+    let tcpHandler;
     try {
+      echo = await createEchoServer();
+      ({ serverWs, cleanup, streams, tcpHandler } = await setupTcpPair({ port: 25421 }));
+
       for (let i = 0; i < 20; i++) {
         const id = 60 + i;
-        serverWs.send(FrameCodec.buildFrame(PROTO.TYPE.TCP_OPEN, id, Buffer.from(JSON.stringify({ host: '127.0.0.1', port: 6379 }))));
+        serverWs.send(
+          FrameCodec.buildFrame(
+            PROTO.TYPE.TCP_OPEN,
+            id,
+            Buffer.from(JSON.stringify({ host: '127.0.0.1', port: echo.port })),
+          ),
+        );
         await sleep(10);
         serverWs.send(FrameCodec.buildFrame(PROTO.TYPE.TCP_CLOSE, id));
       }
@@ -38,7 +63,8 @@ describe('WS disconnect cleanup', () => {
 
       assert.equal(streams.size, 0, 'all TCP streams should be cleaned up');
     } finally {
-      for (const fn of cleanup.reverse()) fn();
+      if (cleanup) for (const fn of cleanup.reverse()) fn();
+      if (echo) await echo.close();
     }
   });
 });

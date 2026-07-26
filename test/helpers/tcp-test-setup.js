@@ -1,3 +1,4 @@
+import net from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { PROTO, FrameCodec } from '../../src/protocol.js';
 
@@ -83,6 +84,26 @@ export async function setupTcpPair({ port, onClientMessage }) {
   }
 
   return { serverWs, clientWs, cleanup, streams, tcpHandler };
+}
+
+export async function createEchoServer() {
+  const sockets = new Set();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on('data', (chunk) => socket.write(chunk));
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  return {
+    port: server.address().port,
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
 }
 
 export { PROTO, sleep, FrameCodec };

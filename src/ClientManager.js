@@ -123,19 +123,41 @@ export class ClientManager {
     }
   }
 
-  async close() {
+  async close(timeoutMs = 5000) {
     this.stopHeartbeat();
 
-    try {
-      for (const ws of this.clients) {
-        try {
-          ws.close(1001, 'Server shutting down');
-        } catch {
-          // ignore
-        }
+    const closePromises = [...this.clients].map((ws) => closeClient(ws, timeoutMs));
+    const results = await Promise.allSettled(closePromises);
+    for (const r of results) {
+      if (r.status === 'rejected') {
+        logVerbose('ws', 'client_close_error', { reason: r.reason?.message });
       }
-    } catch {
-      // ignore
     }
   }
+}
+
+function closeClient(ws, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      try {
+        ws.terminate();
+      } finally {
+        finish();
+      }
+    }, timeoutMs);
+    timer.unref?.();
+    ws.once('close', finish);
+    try {
+      ws.close(1001, 'Server shutting down');
+    } catch {
+      finish();
+    }
+  });
 }

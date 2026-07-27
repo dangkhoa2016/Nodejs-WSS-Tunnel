@@ -1,6 +1,5 @@
 import net from 'node:net';
 import { syncSocketReadState } from './TcpFlowControl.js';
-import { sendJsonFrame } from './WsFrameWriter.js';
 import {
   MAX_CONCURRENT_STREAMS,
   TCP_MAX_CONNECTIONS_PER_PORT,
@@ -14,7 +13,7 @@ import {
 } from './config.js';
 import { isIpAllowed } from './ipAllowlist.js';
 import { logStandard, logVerbose } from './logger.js';
-import { FrameCodec, PROTO } from './protocol.js';
+import { FrameCodec, PROTO, sendJsonFrame } from './protocol.js';
 
 const WS_OPEN = 1;
 

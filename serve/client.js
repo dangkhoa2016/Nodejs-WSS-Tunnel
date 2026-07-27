@@ -8,8 +8,8 @@ import { URL } from 'node:url';
 import WebSocket from 'ws';
 
 import { createTcpClientHandler } from '../src/TcpClientHandler.js';
-import { WsFrameWriter, sendFrame, sendJsonFrame } from '../src/WsFrameWriter.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { WsFrameWriter } from '../src/WsFrameWriter.js';
+import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/protocol.js';
 import { sanitizeHeaders } from '../src/utils.js';
 
 if (process.env.NODE_ENV === 'development') {

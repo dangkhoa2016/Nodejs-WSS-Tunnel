@@ -93,21 +93,34 @@ jobs:
             --name tunnel-server-test \
             tunnel-server
           for i in $(seq 1 20); do
-            if curl -sf http://127.0.0.1:7860/__health > /dev/null 2>&1; then
+            if curl -sf --max-time 10 http://127.0.0.1:7860/__health > /dev/null 2>&1; then
               echo "Container ready"
               break
             fi
             sleep 1
           done
-          curl -fsS http://127.0.0.1:7860/__health | grep -q ok || exit 1
+          curl -fsS --max-time 10 http://127.0.0.1:7860/__health | grep -q ok || exit 1
       - name: Verify artifact routes served from container
         run: |
-          curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
+          curl -sf --max-time 10 http://127.0.0.1:7860/client.js -o /tmp/client.js
           node --check /tmp/client.js
-          curl -sf http://127.0.0.1:7860/client-package.json | grep -q 'tunnel-client'
+          curl -sf --max-time 10 http://127.0.0.1:7860/client-package.json | grep -q 'tunnel-client'
       - name: Run installer and verify upgrade + tunneled requests
         run: |
-          WORK_DIR=$(mktemp -d)
+          set -euo pipefail
+          CLIENT_HOME="$(mktemp -d)"
+          CLIENT_DIR="${CLIENT_HOME}/.tunnel-client"
+          ORIGIN_PID=""
+          ARTIFACT_PROXY_PID=""
+          cleanup() {
+            if [ -f "${CLIENT_DIR}/client.pid" ]; then
+              kill "$(cat "${CLIENT_DIR}/client.pid")" 2>/dev/null || true
+            fi
+            [ -n "$ORIGIN_PID" ] && kill "$ORIGIN_PID" 2>/dev/null || true
+            [ -n "$ARTIFACT_PROXY_PID" ] && kill "$ARTIFACT_PROXY_PID" 2>/dev/null || true
+            rm -rf "$CLIENT_HOME" || true
+          }
+          trap cleanup EXIT
 
           # Start a dummy origin for tunneled requests
           node -e "
@@ -120,18 +133,21 @@ jobs:
           ORIGIN_PID=$!
 
           # First install
-          HOME="$WORK_DIR" \
+          HOME="$CLIENT_HOME" \
           TUNNEL_SERVER_URL=ws://127.0.0.1:7860/tunnel \
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
             bash serve/setup.sh 2>&1
-          FIRST_PID=$(cat "$WORK_DIR/.tunnel-client/current/pid" 2>/dev/null || echo "none")
-          echo "First install PID: $FIRST_PID"
+          FIRST_RELEASE="$(readlink "${CLIENT_DIR}/current")"
+          FIRST_PID="$(cat "${CLIENT_DIR}/client.pid")"
+          FIRST_READY="$(cat "${CLIENT_DIR}/client.ready")"
+          test "$FIRST_PID" = "$FIRST_READY"
+          kill -0 "$FIRST_PID"
 
           # Tunneled request through first install
           sleep 2
-          CURL_OUT=$(curl -sf http://127.0.0.1:7860/hello-proxy 2>&1 || echo "FAILED")
+          CURL_OUT=$(curl -sf --max-time 15 http://127.0.0.1:7860/hello-proxy 2>&1 || echo "FAILED")
           echo "First proxy response: $CURL_OUT"
           if [ "$CURL_OUT" != "proxied:/hello-proxy" ]; then
             echo "ERROR: tunneled request did not reach origin"
@@ -139,55 +155,101 @@ jobs:
           fi
 
           # Second install (upgrade)
-          HOME="$WORK_DIR" \
+          HOME="$CLIENT_HOME" \
           TUNNEL_SERVER_URL=ws://127.0.0.1:7860/tunnel \
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
             bash serve/setup.sh 2>&1
-          SECOND_PID=$(cat "$WORK_DIR/.tunnel-client/current/pid" 2>/dev/null || echo "none")
-          echo "Second install PID: $SECOND_PID"
-
-          # Verify upgrade: PID changed
-          if [ "$FIRST_PID" = "none" ] || [ "$SECOND_PID" = "none" ]; then
-            echo "ERROR: PID file missing"
-            exit 1
-          fi
-          if [ "$FIRST_PID" = "$SECOND_PID" ]; then
-            echo "ERROR: PID did not change after upgrade"
-            exit 1
-          fi
-
-          # Verify previous release exists and matches first release
-          if [ ! -d "$WORK_DIR/.tunnel-client/previous" ]; then
-            echo "ERROR: previous symlink missing after upgrade"
-            exit 1
-          fi
-          PREV_PID=$(cat "$WORK_DIR/.tunnel-client/previous/pid" 2>/dev/null || echo "none")
-          if [ "$PREV_PID" != "$FIRST_PID" ]; then
-            echo "ERROR: previous release does not match first install (prev=$PREV_PID first=$FIRST_PID)"
-            exit 1
-          fi
-
-          # Verify new PID is alive
-          kill -0 "$SECOND_PID" 2>/dev/null || {
-            echo "ERROR: new client PID $SECOND_PID not running"
-            exit 1
-          }
+          SECOND_RELEASE="$(readlink "${CLIENT_DIR}/current")"
+          SECOND_PID="$(cat "${CLIENT_DIR}/client.pid")"
+          SECOND_READY="$(cat "${CLIENT_DIR}/client.ready")"
+          PREVIOUS_RELEASE="$(readlink "${CLIENT_DIR}/previous")"
+          test "$SECOND_RELEASE" != "$FIRST_RELEASE"
+          test "$SECOND_PID" != "$FIRST_PID"
+          test "$SECOND_PID" = "$SECOND_READY"
+          test "$PREVIOUS_RELEASE" = "$FIRST_RELEASE"
+          kill -0 "$SECOND_PID"
 
           # Tunneled request through upgraded install
           sleep 2
-          CURL_OUT2=$(curl -sf http://127.0.0.1:7860/upgrade-test 2>&1 || echo "FAILED")
+          CURL_OUT2=$(curl -sf --max-time 15 http://127.0.0.1:7860/upgrade-test 2>&1 || echo "FAILED")
           echo "Second proxy response: $CURL_OUT2"
           if [ "$CURL_OUT2" != "proxied:/upgrade-test" ]; then
             echo "ERROR: tunneled request failed after upgrade"
             exit 1
           fi
 
-          # Cleanup origin server
-          kill "$ORIGIN_PID" 2>/dev/null || true
+          # Rollback smoke: start an artifact proxy that serves a bad client.js
+          node -e "
+            const http=require('http'),net=require('net');
+            http.createServer((q,r)=>{
+              if(q.url==='/client.js'){r.writeHead(200,{'Content-Type':'application/javascript'});r.end('setInterval(()=>{},1000);');return}
+              const o=http.request({hostname:'127.0.0.1',port:7860,path:q.url,method:q.method,headers:q.headers},p=>{r.writeHead(p.statusCode,p.headers);p.pipe(r)})
+              o.on('error',()=>{r.writeHead(502);r.end()});q.pipe(o)
+            }).on('upgrade',(q,sk,head)=>{
+              const t=net.connect(7860,'127.0.0.1',()=>{
+                t.write(q.method+' '+q.url+' HTTP/'+q.httpVersion+'\r\n')
+                for(let i=0;i<q.rawHeaders.length;i+=2)t.write(q.rawHeaders[i]+': '+q.rawHeaders[i+1]+'\r\n')
+                t.write('\r\n');t.write(head);t.pipe(sk);sk.pipe(t)
+              })
+              t.on('error',()=>sk.destroy())
+            }).listen(7861)
+          " &
+          ARTIFACT_PROXY_PID=$!
 
-          echo "All upgrade checks passed"
+          # Wait for proxy readiness
+          for i in $(seq 1 20); do
+            if curl -sf --max-time 5 \
+              http://127.0.0.1:7861/client-package.json \
+              >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+          curl -fsS --max-time 10 \
+            http://127.0.0.1:7861/client-package.json \
+            >/dev/null
+          kill -0 "$ARTIFACT_PROXY_PID"
+
+          # Third install (bad bundle, should trigger rollback)
+          HOME="$CLIENT_HOME" \
+          TUNNEL_SERVER_URL=ws://127.0.0.1:7861/tunnel \
+          TUNNEL_USERNAME=admin \
+          TUNNEL_PASSWORD=secret \
+          TARGET_ORIGIN=http://127.0.0.1:8080 \
+            bash serve/setup.sh 2>&1 && ROLLBACK_EXIT=$? || ROLLBACK_EXIT=$?
+          echo "=== Client log after third install ==="
+          cat "${CLIENT_DIR}/client.log" 2>/dev/null || true
+          echo "======================================="
+          echo "Rollback smoke: setup.sh exit=$ROLLBACK_EXIT"
+          test "$ROLLBACK_EXIT" = "0"
+          ROLLED_RELEASE="$(readlink "${CLIENT_DIR}/current")"
+          ROLLED_PID="$(cat "${CLIENT_DIR}/client.pid")"
+          ROLLED_READY="$(cat "${CLIENT_DIR}/client.ready")"
+          echo "Rollback smoke: release=$ROLLED_RELEASE pid=$ROLLED_PID ready=$ROLLED_READY"
+          echo "Rollback smoke: expected release=$SECOND_RELEASE previous=$FIRST_RELEASE"
+          test "$ROLLED_RELEASE" = "$SECOND_RELEASE"
+          test "$ROLLED_PID" = "$ROLLED_READY"
+          test "$ROLLED_PID" != "$SECOND_PID"
+          kill -0 "$ROLLED_PID"
+
+          # Verify rollback removed the failed release
+          test "$(find "${CLIENT_DIR}/releases" \
+            -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2
+          test "$(readlink "${CLIENT_DIR}/current")" = "$SECOND_RELEASE"
+          test "$(readlink "${CLIENT_DIR}/previous")" = "$FIRST_RELEASE"
+
+          # Tunneled request after rollback (previous client restarted and should work)
+          sleep 2
+          CURL_OUT3=$(curl -sf --max-time 15 http://127.0.0.1:7860/rollback-test 2>&1 || echo "FAILED")
+          echo "Rollback proxy response: $CURL_OUT3"
+          if [ "$CURL_OUT3" != "proxied:/rollback-test" ]; then
+            echo "ERROR: tunneled request failed after rollback"
+            exit 1
+          fi
+
+          echo "All upgrade and rollback checks passed"
       - name: Stop container
         if: always()
         run: docker stop tunnel-server-test || true
@@ -213,18 +275,18 @@ jobs:
           SERVER_PID=$!
           echo "$SERVER_PID" > /tmp/server.pid
           for i in $(seq 1 20); do
-            if curl -sf http://127.0.0.1:7860/__health > /dev/null 2>&1; then
+            if curl -sf --max-time 5 http://127.0.0.1:7860/__health > /dev/null 2>&1; then
               echo "Server ready"
               break
             fi
             sleep 0.5
           done
-          curl -fsS http://127.0.0.1:7860/__health || exit 1
+          curl -fsS --max-time 5 http://127.0.0.1:7860/__health || exit 1
       - name: Verify artifact routes
         run: |
-          curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
+          curl -sf --max-time 10 http://127.0.0.1:7860/client.js -o /tmp/client.js
           node --check /tmp/client.js
-          curl -sf http://127.0.0.1:7860/client-package.json -o /tmp/pkg.json
+          curl -sf --max-time 10 http://127.0.0.1:7860/client-package.json -o /tmp/pkg.json
           node -e "
             const p = JSON.parse(require('fs').readFileSync('/tmp/pkg.json','utf8'));
             console.log('Manifest:', p.name);

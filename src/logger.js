@@ -1,8 +1,6 @@
 import { serverConfig } from './config.js';
 
-const CATEGORIES = new Set([
-  'ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth', 'tcp',
-]);
+const CATEGORIES = new Set(['ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth', 'tcp']);
 
 function timestamp() {
   return new Date().toISOString();
@@ -10,9 +8,12 @@ function timestamp() {
 
 function formatText(level, cat, evt, data) {
   const ts = timestamp();
-  const dataStr = data && Object.keys(data).length > 0
-    ? ' ' + Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`).join(' ')
-    : '';
+  const dataStr =
+    data && Object.keys(data).length > 0
+      ? ` ${Object.entries(data)
+          .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
+          .join(' ')}`
+      : '';
   return `[${ts}] [${level}] [${cat}] ${evt}${dataStr}`;
 }
 
@@ -29,9 +30,8 @@ function formatJson(level, cat, evt, data) {
 function emit(level, cat, evt, data) {
   if (!CATEGORIES.has(cat)) return;
 
-  const line = serverConfig.logFormat === 'json'
-    ? formatJson(level, cat, evt, data)
-    : formatText(level, cat, evt, data);
+  const line =
+    serverConfig.logFormat === 'json' ? formatJson(level, cat, evt, data) : formatText(level, cat, evt, data);
 
   if (level === 'error') {
     console.error(line);

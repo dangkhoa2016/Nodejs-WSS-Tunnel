@@ -1,5 +1,5 @@
-import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import { serverConfig } from '../src/config.js';
 
 const { logStandard, logVerbose, getConfig, setConfig } = await import('../src/logger.js');
@@ -118,7 +118,9 @@ describe('logVerbose', () => {
   it('respects verbose flag', () => {
     let logged = false;
     const originalLog = console.log;
-    console.log = () => { logged = true; };
+    console.log = () => {
+      logged = true;
+    };
 
     serverConfig.verbose = false;
     logVerbose('ws', 'test', {});

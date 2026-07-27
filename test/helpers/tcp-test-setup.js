@@ -1,8 +1,10 @@
 import net from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
-import { PROTO, FrameCodec } from '../../src/protocol.js';
+import { FrameCodec, PROTO } from '../../src/protocol.js';
 
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 const TCP_HANDLER_DEFAULTS = {
   MAX_CONCURRENT_STREAMS: 200,
@@ -50,7 +52,10 @@ export async function setupTcpPair({ port, onClientMessage }) {
   await new Promise((r) => wss.on('listening', r));
 
   let serverWs;
-  wss.on('connection', (ws) => { serverWs = ws; ws.binaryType = 'nodebuffer'; });
+  wss.on('connection', (ws) => {
+    serverWs = ws;
+    ws.binaryType = 'nodebuffer';
+  });
 
   const clientWs = new WebSocket(`ws://127.0.0.1:${port}`);
   clientWs.binaryType = 'nodebuffer';
@@ -78,7 +83,11 @@ export async function setupTcpPair({ port, onClientMessage }) {
     clientWs.on('message', (data, isBinary) => {
       if (!isBinary) return;
       let frame;
-      try { frame = FrameCodec.parseFrame(data); } catch { return; }
+      try {
+        frame = FrameCodec.parseFrame(data);
+      } catch {
+        return;
+      }
       tcpHandler.handleServerFrame(frame.type, clientWs, frame.streamId, frame.payload, streams.get(frame.streamId));
     });
   }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { test, after } from 'node:test';
+import { after, test } from 'node:test';
 
 const PORT = 17890;
 const INSTALL_UUID = 'test-id';
@@ -34,8 +34,12 @@ function startServer() {
     });
 
     let output = '';
-    server.stdout.on('data', (d) => { output += d.toString(); });
-    server.stderr.on('data', (d) => { output += d.toString(); });
+    server.stdout.on('data', (d) => {
+      output += d.toString();
+    });
+    server.stderr.on('data', (d) => {
+      output += d.toString();
+    });
 
     const timeout = setTimeout(() => reject(new Error('Server start timeout')), 10000);
 
@@ -53,11 +57,15 @@ function startServer() {
 
 function get(path) {
   return new Promise((resolve, reject) => {
-    http.get(`http://127.0.0.1:${PORT}${path}`, (res) => {
-      let body = '';
-      res.on('data', (c) => { body += c.toString(); });
-      res.on('end', () => resolve({ status: res.statusCode, body }));
-    }).on('error', reject);
+    http
+      .get(`http://127.0.0.1:${PORT}${path}`, (res) => {
+        let body = '';
+        res.on('data', (c) => {
+          body += c.toString();
+        });
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      })
+      .on('error', reject);
   });
 }
 

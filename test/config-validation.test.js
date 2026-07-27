@@ -1,6 +1,6 @@
 process.env.NODE_ENV = 'test';
-import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
 
 describe('config helpers', () => {
   it('readInteger returns default when env not set', async () => {

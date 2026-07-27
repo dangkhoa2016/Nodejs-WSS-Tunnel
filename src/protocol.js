@@ -1,3 +1,5 @@
+import WebSocket from 'ws';
+
 export const PROTO = Object.freeze({
   VERSION: 1,
   TYPE: Object.freeze({
@@ -19,6 +21,10 @@ export const PROTO = Object.freeze({
     TCP_DATA: 0x41,
     TCP_CLOSE: 0x42,
     TCP_ABORT: 0x43,
+
+    // TCP agent over WebSocket frame types
+    TCP_CONNECT: 0x50,
+    TCP_CONNECT_ACK: 0x51,
   }),
 });
 
@@ -86,4 +92,24 @@ function toBuffer(data) {
   }
 
   return Buffer.from(data);
+}
+
+export function sendFrame(ws, frame) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+
+  try {
+    ws.send(frame, { binary: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function sendJsonFrame(ws, type, streamId, obj) {
+  try {
+    const payload = Buffer.from(JSON.stringify(obj || {}), 'utf8');
+    return sendFrame(ws, FrameCodec.buildFrame(type, streamId, payload));
+  } catch {
+    return false;
+  }
 }

@@ -1,6 +1,7 @@
 process.env.NODE_ENV = 'test';
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { spawn } from 'node:child_process';
+import { describe, it, test } from 'node:test';
 
 describe('config helpers', () => {
   it('readInteger returns default when env not set', async () => {
@@ -135,5 +136,34 @@ describe('live config values', () => {
     assert.ok(Number.isFinite(mod.STREAM_IDLE_TIMEOUT_MS) && mod.STREAM_IDLE_TIMEOUT_MS >= 0);
     assert.ok(Number.isInteger(mod.MAX_CONCURRENT_STREAMS) && mod.MAX_CONCURRENT_STREAMS > 0);
     assert.ok(Array.isArray(mod.TCP_TUNNEL_PORTS));
+    assert.ok(mod.TCP_AGENT_PATH.startsWith('/'));
+    assert.ok(Array.isArray(mod.TCP_AGENT_ALLOWED_PORTS));
+    assert.equal(mod.TCP_AGENT_USERNAME, mod.USERNAME);
+    assert.equal(mod.TCP_AGENT_PASSWORD, mod.PASSWORD);
+    assert.ok(Array.isArray(mod.TCP_AGENT_ALLOWED_ORIGINS));
+    assert.equal(typeof mod.TCP_AGENT_REQUIRE_TLS, 'boolean');
+    assert.ok(Number.isInteger(mod.TCP_AGENT_MAX_STREAMS_PER_AGENT) && mod.TCP_AGENT_MAX_STREAMS_PER_AGENT >= 0);
   });
+});
+
+test('validateConfig rejects TUNNEL_PATH equal to TCP_AGENT_PATH', async () => {
+  const proc = spawn(process.execPath, ['src/index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      TUNNEL_USERNAME: 'a',
+      TUNNEL_PASSWORD: 'b',
+      TUNNEL_PATH: '/tcp',
+      TCP_AGENT_PATH: '/tcp',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  proc.stderr.on('data', (d) => {
+    stderr += d.toString();
+  });
+  const code = await new Promise((resolve) => proc.on('exit', resolve));
+  assert.equal(code, 1);
+  assert.match(stderr, /TUNNEL_PATH/);
 });

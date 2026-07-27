@@ -104,10 +104,15 @@ function getDataFrames(received, streamId) {
 const REDIS_PORT = 6379;
 const PG_PORT = 5432;
 
+function requireServices() {
+  return process.env.REQUIRE_TCP_SERVICES === '1';
+}
+
 describe('Real TCP Integration Tests', () => {
   it('Redis: PING/PONG', { timeout: 10000 }, async (t) => {
     if (!(await canConnect('127.0.0.1', REDIS_PORT))) {
-      t.skip('Redis not available on port ' + REDIS_PORT);
+      if (requireServices()) throw new Error(`Redis not available on port ${REDIS_PORT}`);
+      t.skip(`Redis not available on port ${REDIS_PORT}`);
       return;
     }
     const { serverWs, cleanup, received } = await setupPair(25379);
@@ -132,7 +137,8 @@ describe('Real TCP Integration Tests', () => {
 
   it('Redis: SET/GET/DEL', { timeout: 10000 }, async (t) => {
     if (!(await canConnect('127.0.0.1', REDIS_PORT))) {
-      t.skip('Redis not available on port ' + REDIS_PORT);
+      if (requireServices()) throw new Error(`Redis not available on port ${REDIS_PORT}`);
+      t.skip(`Redis not available on port ${REDIS_PORT}`);
       return;
     }
     const { serverWs, cleanup, received } = await setupPair(25380);
@@ -161,7 +167,8 @@ describe('Real TCP Integration Tests', () => {
 
   it('Postgres: TCP connect through tunnel', { timeout: 10000 }, async (t) => {
     if (!(await canConnect('127.0.0.1', PG_PORT))) {
-      t.skip('Postgres not available on port ' + PG_PORT);
+      if (requireServices()) throw new Error(`Postgres not available on port ${PG_PORT}`);
+      t.skip(`Postgres not available on port ${PG_PORT}`);
       return;
     }
     const { serverWs, cleanup, streams } = await setupPair(25381);
@@ -184,7 +191,8 @@ describe('Real TCP Integration Tests', () => {
 
   it('concurrent: 5 parallel Redis PINGs', { timeout: 10000 }, async (t) => {
     if (!(await canConnect('127.0.0.1', REDIS_PORT))) {
-      t.skip('Redis not available on port ' + REDIS_PORT);
+      if (requireServices()) throw new Error(`Redis not available on port ${REDIS_PORT}`);
+      t.skip(`Redis not available on port ${REDIS_PORT}`);
       return;
     }
     const { serverWs, cleanup, received } = await setupPair(25382);

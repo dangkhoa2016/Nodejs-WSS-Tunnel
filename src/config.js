@@ -133,6 +133,28 @@ const TCP_MAX_CONNECTIONS_PER_PORT = readInteger('TCP_MAX_CONNECTIONS_PER_PORT',
 
 const TCP_SHUTDOWN_DRAIN_TIMEOUT_MS = readInteger('TCP_SHUTDOWN_DRAIN_TIMEOUT_MS', 5000, { min: 0 });
 
+const TCP_AGENT_PATH = (() => {
+  const raw = process.env.TCP_AGENT_PATH ?? '/tcp';
+  if (!raw.startsWith('/')) {
+    throw new Error(`[config] TCP_AGENT_PATH must start with "/", got "${raw}"`);
+  }
+  return raw;
+})();
+
+const TCP_AGENT_ALLOWED_PORTS = readPortList('TCP_AGENT_ALLOWED_PORTS');
+
+const TCP_AGENT_USERNAME = process.env.TCP_AGENT_USERNAME || USERNAME;
+const TCP_AGENT_PASSWORD = process.env.TCP_AGENT_PASSWORD || PASSWORD;
+
+const TCP_AGENT_ALLOWED_ORIGINS = (process.env.TCP_AGENT_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const TCP_AGENT_REQUIRE_TLS = readBoolean('TCP_AGENT_REQUIRE_TLS', false);
+
+const TCP_AGENT_MAX_STREAMS_PER_AGENT = readInteger('TCP_AGENT_MAX_STREAMS_PER_AGENT', 100, { min: 0 });
+
 if (TCP_TUNNEL_PORTS.length > 0 && TCP_TUNNEL_BIND_HOST === '0.0.0.0' && TCP_TUNNEL_ALLOWED_IPS.length === 0) {
   console.warn(
     '[config] SECURITY WARNING: TCP_TUNNEL_BIND_HOST=0.0.0.0 with no TCP_TUNNEL_ALLOWED_IPS set. ' +
@@ -156,6 +178,11 @@ export function validateConfig() {
 
   if (WS_LOW_WATER >= WS_HIGH_WATER) {
     console.error(`[FATAL] WS_LOW_WATER (${WS_LOW_WATER}) must be less than WS_HIGH_WATER (${WS_HIGH_WATER})`);
+    process.exit(1);
+  }
+
+  if (TUNNEL_PATH === TCP_AGENT_PATH) {
+    console.error(`[FATAL] TUNNEL_PATH (${TUNNEL_PATH}) must differ from TCP_AGENT_PATH (${TCP_AGENT_PATH})`);
     process.exit(1);
   }
 
@@ -205,4 +232,11 @@ export {
   TCP_CONNECT_TIMEOUT_MS,
   TCP_MAX_CONNECTIONS_PER_PORT,
   TCP_SHUTDOWN_DRAIN_TIMEOUT_MS,
+  TCP_AGENT_PATH,
+  TCP_AGENT_ALLOWED_PORTS,
+  TCP_AGENT_USERNAME,
+  TCP_AGENT_PASSWORD,
+  TCP_AGENT_ALLOWED_ORIGINS,
+  TCP_AGENT_REQUIRE_TLS,
+  TCP_AGENT_MAX_STREAMS_PER_AGENT,
 };

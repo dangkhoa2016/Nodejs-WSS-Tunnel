@@ -25,7 +25,7 @@ export function safeEqual(a, b) {
   return crypto.timingSafeEqual(ha, hb);
 }
 
-export function verifyBasicAuth(req) {
+export function verifyBasicAuth(req, username = USERNAME, password = PASSWORD) {
   const authHeader = req.headers.authorization;
   if (!authHeader) return false;
 
@@ -46,7 +46,7 @@ export function verifyBasicAuth(req) {
   const user = decoded.slice(0, idx);
   const pass = decoded.slice(idx + 1);
 
-  return safeEqual(user, USERNAME) && safeEqual(pass, PASSWORD);
+  return safeEqual(user, username) && safeEqual(pass, password);
 }
 
 export function sanitizeHeaders(headers, { removeHost = true } = {}) {

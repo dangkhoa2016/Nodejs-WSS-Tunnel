@@ -2,7 +2,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { sendFrame } from './WsFrameWriter.js';
 import { ADMIN_SECRET, INSTALL_UUID, MAX_CONCURRENT_STREAMS, SERVER_HOST, TUNNEL_PATH } from './config.js';
 import { getConfig, logStandard, logVerbose, setConfig } from './logger.js';
 import { FrameCodec, PROTO } from './protocol.js';

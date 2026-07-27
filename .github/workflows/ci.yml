@@ -53,6 +53,8 @@ jobs:
         ports:
           - 5432:5432
         options: --health-cmd "pg_isready -U tunnel" --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      REQUIRE_TCP_SERVICES: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -103,15 +105,89 @@ jobs:
           curl -sf http://127.0.0.1:7860/client.js -o /tmp/client.js
           node --check /tmp/client.js
           curl -sf http://127.0.0.1:7860/client-package.json | grep -q 'tunnel-client'
-      - name: Run installer from container artifacts
+      - name: Run installer and verify upgrade + tunneled requests
         run: |
-          TMPDIR=$(mktemp -d)
-          HOME="$TMPDIR" \
+          WORK_DIR=$(mktemp -d)
+
+          # Start a dummy origin for tunneled requests
+          node -e "
+            const http = require('http');
+            http.createServer((req, res) => {
+              res.writeHead(200, {'Content-Type':'text/plain'});
+              res.end('proxied:' + req.url);
+            }).listen(8080, () => console.log('origin ready on 8080'));
+          " &
+          ORIGIN_PID=$!
+
+          # First install
+          HOME="$WORK_DIR" \
           TUNNEL_SERVER_URL=ws://127.0.0.1:7860/tunnel \
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
             bash serve/setup.sh 2>&1
+          FIRST_PID=$(cat "$WORK_DIR/.tunnel-client/current/pid" 2>/dev/null || echo "none")
+          echo "First install PID: $FIRST_PID"
+
+          # Tunneled request through first install
+          sleep 2
+          CURL_OUT=$(curl -sf http://127.0.0.1:7860/hello-proxy 2>&1 || echo "FAILED")
+          echo "First proxy response: $CURL_OUT"
+          if [ "$CURL_OUT" != "proxied:/hello-proxy" ]; then
+            echo "ERROR: tunneled request did not reach origin"
+            exit 1
+          fi
+
+          # Second install (upgrade)
+          HOME="$WORK_DIR" \
+          TUNNEL_SERVER_URL=ws://127.0.0.1:7860/tunnel \
+          TUNNEL_USERNAME=admin \
+          TUNNEL_PASSWORD=secret \
+          TARGET_ORIGIN=http://127.0.0.1:8080 \
+            bash serve/setup.sh 2>&1
+          SECOND_PID=$(cat "$WORK_DIR/.tunnel-client/current/pid" 2>/dev/null || echo "none")
+          echo "Second install PID: $SECOND_PID"
+
+          # Verify upgrade: PID changed
+          if [ "$FIRST_PID" = "none" ] || [ "$SECOND_PID" = "none" ]; then
+            echo "ERROR: PID file missing"
+            exit 1
+          fi
+          if [ "$FIRST_PID" = "$SECOND_PID" ]; then
+            echo "ERROR: PID did not change after upgrade"
+            exit 1
+          fi
+
+          # Verify previous release exists and matches first release
+          if [ ! -d "$WORK_DIR/.tunnel-client/previous" ]; then
+            echo "ERROR: previous symlink missing after upgrade"
+            exit 1
+          fi
+          PREV_PID=$(cat "$WORK_DIR/.tunnel-client/previous/pid" 2>/dev/null || echo "none")
+          if [ "$PREV_PID" != "$FIRST_PID" ]; then
+            echo "ERROR: previous release does not match first install (prev=$PREV_PID first=$FIRST_PID)"
+            exit 1
+          fi
+
+          # Verify new PID is alive
+          kill -0 "$SECOND_PID" 2>/dev/null || {
+            echo "ERROR: new client PID $SECOND_PID not running"
+            exit 1
+          }
+
+          # Tunneled request through upgraded install
+          sleep 2
+          CURL_OUT2=$(curl -sf http://127.0.0.1:7860/upgrade-test 2>&1 || echo "FAILED")
+          echo "Second proxy response: $CURL_OUT2"
+          if [ "$CURL_OUT2" != "proxied:/upgrade-test" ]; then
+            echo "ERROR: tunneled request failed after upgrade"
+            exit 1
+          fi
+
+          # Cleanup origin server
+          kill "$ORIGIN_PID" 2>/dev/null || true
+
+          echo "All upgrade checks passed"
       - name: Stop container
         if: always()
         run: docker stop tunnel-server-test || true

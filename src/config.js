@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { isValidIpOrCidr } from './ipAllowlist.js';
 
 if (!process.env.NODE_ENV || process.env.NODE_ENV === 'development') {
   try {
@@ -91,7 +92,7 @@ const USERNAME = process.env.TUNNEL_USERNAME || '';
 const PASSWORD = process.env.TUNNEL_PASSWORD || '';
 
 const MAX_CONCURRENT_STREAMS = readInteger('MAX_CONCURRENT_STREAMS', 200, { min: 1 });
-const MAX_TUNNEL_CLIENTS = 1;
+const MAX_TUNNEL_CLIENTS = readInteger('MAX_TUNNEL_CLIENTS', 1, { min: 1 });
 
 const STREAM_IDLE_TIMEOUT_MS = readInteger('STREAM_IDLE_TIMEOUT_MS', 120000, { min: 0 });
 const DRAIN_TIMEOUT_MS = readInteger('DRAIN_TIMEOUT_MS', 30000, { min: 0 });
@@ -133,6 +134,48 @@ const TCP_MAX_CONNECTIONS_PER_PORT = readInteger('TCP_MAX_CONNECTIONS_PER_PORT',
 
 const TCP_SHUTDOWN_DRAIN_TIMEOUT_MS = readInteger('TCP_SHUTDOWN_DRAIN_TIMEOUT_MS', 5000, { min: 0 });
 
+const TCP_AGENT_PATH = (() => {
+  const raw = process.env.TCP_AGENT_PATH ?? '/tcp';
+  if (!raw.startsWith('/')) {
+    throw new Error(`[config] TCP_AGENT_PATH must start with "/", got "${raw}"`);
+  }
+  return raw;
+})();
+
+const TCP_AGENT_ALLOWED_PORTS = readPortList('TCP_AGENT_ALLOWED_PORTS');
+
+const TCP_AGENT_USERNAME = process.env.TCP_AGENT_USERNAME || USERNAME;
+const TCP_AGENT_PASSWORD = process.env.TCP_AGENT_PASSWORD || PASSWORD;
+
+const TCP_AGENT_ALLOWED_ORIGINS = (process.env.TCP_AGENT_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const TCP_AGENT_REQUIRE_TLS = readBoolean('TCP_AGENT_REQUIRE_TLS', false);
+
+function readIpList(name) {
+  const raw = process.env[name] || '';
+  if (!raw) return [];
+  const seen = new Set();
+  const entries = [];
+  for (const s of raw.split(',')) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    if (!isValidIpOrCidr(trimmed)) {
+      throw new Error(`[config] ${name}: invalid IP/CIDR "${trimmed}"`);
+    }
+    if (seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    entries.push(trimmed);
+  }
+  return entries;
+}
+
+const TCP_AGENT_TRUSTED_PROXIES = readIpList('TCP_AGENT_TRUSTED_PROXIES');
+
+const TCP_AGENT_MAX_STREAMS_PER_AGENT = readInteger('TCP_AGENT_MAX_STREAMS_PER_AGENT', 100, { min: 0 });
+
 if (TCP_TUNNEL_PORTS.length > 0 && TCP_TUNNEL_BIND_HOST === '0.0.0.0' && TCP_TUNNEL_ALLOWED_IPS.length === 0) {
   console.warn(
     '[config] SECURITY WARNING: TCP_TUNNEL_BIND_HOST=0.0.0.0 with no TCP_TUNNEL_ALLOWED_IPS set. ' +
@@ -159,6 +202,11 @@ export function validateConfig() {
     process.exit(1);
   }
 
+  if (TUNNEL_PATH === TCP_AGENT_PATH) {
+    console.error(`[FATAL] TUNNEL_PATH (${TUNNEL_PATH}) must differ from TCP_AGENT_PATH (${TCP_AGENT_PATH})`);
+    process.exit(1);
+  }
+
   if (MAX_FRAME_PAYLOAD > WS_MAX_PAYLOAD - PROTOCOL_OVERHEAD) {
     console.error(
       `[FATAL] MAX_FRAME_PAYLOAD (${MAX_FRAME_PAYLOAD}) exceeds WS_MAX_PAYLOAD - overhead (${WS_MAX_PAYLOAD - PROTOCOL_OVERHEAD})`,
@@ -178,6 +226,7 @@ export {
   readInteger,
   readBoolean,
   readUrl,
+  readIpList,
   readPortList,
   PORT,
   TUNNEL_PATH,
@@ -205,4 +254,12 @@ export {
   TCP_CONNECT_TIMEOUT_MS,
   TCP_MAX_CONNECTIONS_PER_PORT,
   TCP_SHUTDOWN_DRAIN_TIMEOUT_MS,
+  TCP_AGENT_PATH,
+  TCP_AGENT_ALLOWED_PORTS,
+  TCP_AGENT_TRUSTED_PROXIES,
+  TCP_AGENT_USERNAME,
+  TCP_AGENT_PASSWORD,
+  TCP_AGENT_ALLOWED_ORIGINS,
+  TCP_AGENT_REQUIRE_TLS,
+  TCP_AGENT_MAX_STREAMS_PER_AGENT,
 };

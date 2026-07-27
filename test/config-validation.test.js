@@ -1,6 +1,8 @@
 process.env.NODE_ENV = 'test';
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
+import { describe, it, test } from 'node:test';
 
 describe('config helpers', () => {
   it('readInteger returns default when env not set', async () => {
@@ -124,6 +126,33 @@ describe('config helpers', () => {
     delete process.env.TEST_PORTS;
     assert.deepEqual(readPortList('TEST_PORTS'), []);
   });
+
+  it('readIpList returns empty for no env', async () => {
+    const { readIpList } = await import('../src/config.js');
+    delete process.env.TEST_IPS;
+    assert.deepEqual(readIpList('TEST_IPS'), []);
+  });
+
+  it('readIpList parses and deduplicates a list', async () => {
+    const { readIpList } = await import('../src/config.js');
+    process.env.TEST_IPS = '127.0.0.1, 10.0.0.0/8,127.0.0.1';
+    assert.deepEqual(readIpList('TEST_IPS'), ['127.0.0.1', '10.0.0.0/8']);
+    delete process.env.TEST_IPS;
+  });
+
+  it('readIpList rejects an invalid IP', async () => {
+    const { readIpList } = await import('../src/config.js');
+    process.env.TEST_IPS = '127.0.0.1,999.1.2.3';
+    assert.throws(() => readIpList('TEST_IPS'), /TEST_IPS/);
+    delete process.env.TEST_IPS;
+  });
+
+  it('readIpList rejects an invalid CIDR', async () => {
+    const { readIpList } = await import('../src/config.js');
+    process.env.TEST_IPS = '127.0.0.0/33';
+    assert.throws(() => readIpList('TEST_IPS'), /TEST_IPS/);
+    delete process.env.TEST_IPS;
+  });
 });
 
 describe('live config values', () => {
@@ -135,5 +164,71 @@ describe('live config values', () => {
     assert.ok(Number.isFinite(mod.STREAM_IDLE_TIMEOUT_MS) && mod.STREAM_IDLE_TIMEOUT_MS >= 0);
     assert.ok(Number.isInteger(mod.MAX_CONCURRENT_STREAMS) && mod.MAX_CONCURRENT_STREAMS > 0);
     assert.ok(Array.isArray(mod.TCP_TUNNEL_PORTS));
+    assert.ok(mod.TCP_AGENT_PATH.startsWith('/'));
+    assert.ok(Array.isArray(mod.TCP_AGENT_ALLOWED_PORTS));
+    assert.equal(mod.TCP_AGENT_USERNAME, mod.USERNAME);
+    assert.equal(mod.TCP_AGENT_PASSWORD, mod.PASSWORD);
+    assert.ok(Array.isArray(mod.TCP_AGENT_ALLOWED_ORIGINS));
+    assert.equal(typeof mod.TCP_AGENT_REQUIRE_TLS, 'boolean');
+    assert.ok(Array.isArray(mod.TCP_AGENT_TRUSTED_PROXIES));
+    assert.ok(Number.isInteger(mod.TCP_AGENT_MAX_STREAMS_PER_AGENT) && mod.TCP_AGENT_MAX_STREAMS_PER_AGENT >= 0);
   });
+
+  it('rejects invalid TCP_AGENT_TRUSTED_PROXIES at startup', async () => {
+    const modulePath = path.join(process.cwd(), 'src', 'config.js');
+    const proc = spawn(process.execPath, ['-e', `import(${JSON.stringify(modulePath)})`], {
+      cwd: process.cwd(),
+      env: { ...process.env, TCP_AGENT_TRUSTED_PROXIES: '127.0.0.0/99' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    proc.stderr.on('data', (d) => {
+      stderr += d.toString();
+    });
+    const code = await new Promise((resolve) => proc.on('exit', resolve));
+    assert.equal(code, 1);
+    assert.match(stderr, /TCP_AGENT_TRUSTED_PROXIES/);
+  });
+
+  it('reads MAX_TUNNEL_CLIENTS from env', async () => {
+    const modulePath = path.join(process.cwd(), 'src', 'config.js');
+    const proc = spawn(
+      process.execPath,
+      ['-e', `import(${JSON.stringify(modulePath)}).then((m) => process.stdout.write(String(m.MAX_TUNNEL_CLIENTS)))`],
+      {
+        cwd: process.cwd(),
+        env: { ...process.env, MAX_TUNNEL_CLIENTS: '3' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    let stdout = '';
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+    });
+    const code = await new Promise((resolve) => proc.on('exit', resolve));
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '3');
+  });
+});
+
+test('validateConfig rejects TUNNEL_PATH equal to TCP_AGENT_PATH', async () => {
+  const proc = spawn(process.execPath, ['src/index.js'], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      TUNNEL_USERNAME: 'a',
+      TUNNEL_PASSWORD: 'b',
+      TUNNEL_PATH: '/tcp',
+      TCP_AGENT_PATH: '/tcp',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stderr = '';
+  proc.stderr.on('data', (d) => {
+    stderr += d.toString();
+  });
+  const code = await new Promise((resolve) => proc.on('exit', resolve));
+  assert.equal(code, 1);
+  assert.match(stderr, /TUNNEL_PATH/);
 });

@@ -1,27 +1,7 @@
 import { Writable } from 'node:stream';
 import WebSocket from 'ws';
 import { DRAIN_TIMEOUT_MS, MAX_FRAME_PAYLOAD, WS_HIGH_WATER } from './config.js';
-import { FrameCodec, PROTO } from './protocol.js';
-
-export function sendFrame(ws, frame) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-
-  try {
-    ws.send(frame, { binary: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function sendJsonFrame(ws, type, streamId, obj) {
-  try {
-    const payload = Buffer.from(JSON.stringify(obj || {}), 'utf8');
-    return sendFrame(ws, FrameCodec.buildFrame(type, streamId, payload));
-  } catch {
-    return false;
-  }
-}
+import { FrameCodec, PROTO, sendFrame } from './protocol.js';
 
 export function waitDrain(ws) {
   return new Promise((resolve, reject) => {

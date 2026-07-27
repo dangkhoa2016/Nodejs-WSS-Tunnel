@@ -1,12 +1,12 @@
-import { pipeline } from 'stream';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { TUNNEL_PATH, SERVER_HOST, INSTALL_UUID, MAX_CONCURRENT_STREAMS, ADMIN_SECRET } from './config.js';
-import { PROTO, FrameCodec } from './protocol.js';
-import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pipeline } from 'node:stream';
+import { fileURLToPath } from 'node:url';
 import { sendFrame } from './WsFrameWriter.js';
-import { logStandard, logVerbose, getConfig, setConfig } from './logger.js';
+import { ADMIN_SECRET, INSTALL_UUID, MAX_CONCURRENT_STREAMS, SERVER_HOST, TUNNEL_PATH } from './config.js';
+import { getConfig, logStandard, logVerbose, setConfig } from './logger.js';
+import { FrameCodec, PROTO } from './protocol.js';
+import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,7 +120,7 @@ export class HttpRouter {
 
     if (pathname === '/' && req.method === 'GET') {
       if (!this.clientManager.getActiveClient()) {
-        res.writeHead(302, { 'Location': '/__info' });
+        res.writeHead(302, { Location: '/__info' });
         res.end();
         return;
       }
@@ -209,11 +209,7 @@ export class HttpRouter {
 
     if (pathname !== TUNNEL_PATH) {
       try {
-        socket.write(
-          'HTTP/1.1 501 Not Implemented\r\n' +
-          'Connection: close\r\n' +
-          '\r\n'
-        );
+        socket.write('HTTP/1.1 501 Not Implemented\r\n' + 'Connection: close\r\n' + '\r\n');
       } catch {
         // ignore
       }
@@ -227,10 +223,10 @@ export class HttpRouter {
       try {
         socket.write(
           'HTTP/1.1 401 Unauthorized\r\n' +
-          'WWW-Authenticate: Basic realm="tunnel"\r\n' +
-          'Connection: close\r\n' +
-          'Content-Length: 0\r\n' +
-          '\r\n'
+            'WWW-Authenticate: Basic realm="tunnel"\r\n' +
+            'Connection: close\r\n' +
+            'Content-Length: 0\r\n' +
+            '\r\n',
         );
       } catch {
         // ignore
@@ -271,10 +267,12 @@ export class HttpRouter {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
       });
-      res.end(JSON.stringify({
-        error: 'tunnel_unavailable',
-        message: 'No tunnel client connected',
-      }));
+      res.end(
+        JSON.stringify({
+          error: 'tunnel_unavailable',
+          message: 'No tunnel client connected',
+        }),
+      );
       return;
     }
 

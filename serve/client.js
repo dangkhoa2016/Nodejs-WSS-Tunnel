@@ -1,6 +1,6 @@
+import { writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
-import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pipeline } from 'node:stream';
 import { URL } from 'node:url';

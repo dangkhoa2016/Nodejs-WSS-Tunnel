@@ -1,5 +1,5 @@
-import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { beforeEach, describe, it } from 'node:test';
 import WebSocket from 'ws';
 
 const { StreamManager } = await import('../src/StreamManager.js');
@@ -10,9 +10,15 @@ function mockWs(readyState = WebSocket.OPEN) {
   return {
     readyState,
     bufferedAmount: 0,
-    send(data, opts) { sent.push({ data, opts }); },
-    _sent() { return sent; },
-    _clear() { sent.length = 0; },
+    send(data, opts) {
+      sent.push({ data, opts });
+    },
+    _sent() {
+      return sent;
+    },
+    _clear() {
+      sent.length = 0;
+    },
   };
 }
 
@@ -24,14 +30,22 @@ function mockRes() {
   let headersWritten = false;
   let ended = false;
   return {
-    get writableEnded() { return ended; },
+    get writableEnded() {
+      return ended;
+    },
     writeHead(status, msg, headers) {
       headersWritten = true;
     },
-    end() { ended = true; },
+    end() {
+      ended = true;
+    },
     destroy() {},
-    _headersWritten() { return headersWritten; },
-    _ended() { return ended; },
+    _headersWritten() {
+      return headersWritten;
+    },
+    _ended() {
+      return ended;
+    },
   };
 }
 
@@ -102,7 +116,9 @@ describe('StreamManager', () => {
 
     it('returns null and sends 503 when ws.send fails', () => {
       const ws = mockWs(WebSocket.OPEN);
-      ws.send = () => { throw new Error('send failed'); };
+      ws.send = () => {
+        throw new Error('send failed');
+      };
       const res = mockRes();
       const meta = { method: 'GET', url: '/', headers: {} };
       const streamId = sm.allocateStreamId();
@@ -228,10 +244,16 @@ describe('StreamManager', () => {
   describe('handleClientFrame', () => {
     it('ignores frames for unknown stream ids', () => {
       const ws = mockWs();
-      const frame = FrameCodec.buildFrame(PROTO.TYPE.RES_META, 9999, Buffer.from(JSON.stringify({
-        statusCode: 200,
-        headers: {},
-      })));
+      const frame = FrameCodec.buildFrame(
+        PROTO.TYPE.RES_META,
+        9999,
+        Buffer.from(
+          JSON.stringify({
+            statusCode: 200,
+            headers: {},
+          }),
+        ),
+      );
 
       assert.doesNotThrow(() => sm.handleClientFrame(ws, frame));
     });
@@ -244,10 +266,16 @@ describe('StreamManager', () => {
 
       sm.createStream({ ws, req: mockReq(), res: mockRes(), meta, streamId });
 
-      const frame = FrameCodec.buildFrame(PROTO.TYPE.RES_META, streamId, Buffer.from(JSON.stringify({
-        statusCode: 200,
-        headers: {},
-      })));
+      const frame = FrameCodec.buildFrame(
+        PROTO.TYPE.RES_META,
+        streamId,
+        Buffer.from(
+          JSON.stringify({
+            statusCode: 200,
+            headers: {},
+          }),
+        ),
+      );
 
       assert.doesNotThrow(() => sm.handleClientFrame(otherWs, frame));
       const state = sm.streams.get(streamId);

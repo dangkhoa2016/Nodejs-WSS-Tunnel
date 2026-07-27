@@ -1,7 +1,7 @@
-import { Writable } from 'stream';
+import { Writable } from 'node:stream';
 import WebSocket from 'ws';
-import { WS_HIGH_WATER, DRAIN_TIMEOUT_MS, MAX_FRAME_PAYLOAD } from './config.js';
-import { PROTO, FrameCodec } from './protocol.js';
+import { DRAIN_TIMEOUT_MS, MAX_FRAME_PAYLOAD, WS_HIGH_WATER } from './config.js';
+import { FrameCodec, PROTO } from './protocol.js';
 
 export function sendFrame(ws, frame) {
   if (!ws || ws.readyState !== WebSocket.OPEN) return false;
@@ -115,10 +115,7 @@ export class WsFrameWriter extends Writable {
         const end = Math.min(offset + MAX_FRAME_PAYLOAD, buf.length);
         const slice = buf.subarray(offset, end);
 
-        const sent = sendFrame(
-          this.ws,
-          FrameCodec.buildFrame(this.frameType, this.streamId, slice)
-        );
+        const sent = sendFrame(this.ws, FrameCodec.buildFrame(this.frameType, this.streamId, slice));
 
         if (!sent) {
           throw new Error('Failed to send WebSocket frame');

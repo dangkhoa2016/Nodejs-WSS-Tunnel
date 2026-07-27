@@ -1,5 +1,5 @@
-import crypto from 'crypto';
-import { USERNAME, PASSWORD } from './config.js';
+import crypto from 'node:crypto';
+import { PASSWORD, USERNAME } from './config.js';
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -14,13 +14,19 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 export function safeEqual(a, b) {
-  const ha = crypto.createHash('sha256').update(String(a ?? '')).digest();
-  const hb = crypto.createHash('sha256').update(String(b ?? '')).digest();
+  const ha = crypto
+    .createHash('sha256')
+    .update(String(a ?? ''))
+    .digest();
+  const hb = crypto
+    .createHash('sha256')
+    .update(String(b ?? ''))
+    .digest();
   return crypto.timingSafeEqual(ha, hb);
 }
 
 export function verifyBasicAuth(req) {
-  const authHeader = req.headers['authorization'];
+  const authHeader = req.headers.authorization;
   if (!authHeader) return false;
 
   const parts = authHeader.split(' ');
@@ -78,10 +84,7 @@ export function validateHmacSignature(basePath, secret, expires, sig) {
   const expected = crypto.createHmac('sha256', secret).update(payload).digest('hex');
 
   try {
-    return crypto.timingSafeEqual(
-      Buffer.from(sig, 'hex'),
-      Buffer.from(expected, 'hex')
-    );
+    return crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'));
   } catch {
     return false;
   }

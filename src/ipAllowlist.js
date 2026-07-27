@@ -30,7 +30,7 @@ function normalizeIp(addr) {
 function matchCidr(ip, cidr) {
   if (!cidr.includes('/')) return ip === cidr;
   const [range, bitsStr] = cidr.split('/');
-  const bits = parseInt(bitsStr, 10);
+  const bits = Number.parseInt(bitsStr, 10);
   if (!Number.isFinite(bits) || bits < 0 || bits > 32) return false;
   const ipInt = ipToInt(ip);
   const rangeInt = ipToInt(range);

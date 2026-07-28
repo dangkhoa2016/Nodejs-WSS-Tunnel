@@ -8,8 +8,9 @@ import { URL } from 'node:url';
 import WebSocket from 'ws';
 
 import { createTcpClientHandler } from '../src/TcpClientHandler.js';
-import { WsFrameWriter, sendFrame, sendJsonFrame } from '../src/WsFrameWriter.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { WsFrameWriter } from '../src/WsFrameWriter.js';
+import { logStandard, logVerbose } from '../src/logging.js';
+import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/protocol.js';
 import { sanitizeHeaders } from '../src/utils.js';
 
 if (process.env.NODE_ENV === 'development') {
@@ -110,8 +111,10 @@ const tcpHandler = createTcpClientHandler({
 let ws = null;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
+let reconnectAttempt = 0;
 let heartbeatInterval = null;
 let authFailed = false;
+let shuttingDown = false;
 
 // ---------------------------------------------------------------------------
 // Stream lifecycle
@@ -135,6 +138,10 @@ function cleanupStream(state) {
   if (state.timer) clearTimeout(state.timer);
 
   streams.delete(state.id);
+
+  if (state.mode === 'tcp') {
+    logVerbose('client', 'stream_closed', { streamId: state.id });
+  }
 
   if (state.responseWriter) {
     try {
@@ -196,6 +203,18 @@ function handleServerFrame(currentWs, data) {
 
   if (type === PROTO.TYPE.REQ_META) {
     handleReqMeta(currentWs, streamId, payload);
+    return;
+  }
+
+  if (type === PROTO.TYPE.TCP_OPEN) {
+    let tcpMeta = {};
+    try {
+      tcpMeta = FrameCodec.parseJsonPayload(payload, MAX_FRAME_PAYLOAD);
+    } catch {
+      tcpMeta = {};
+    }
+    logVerbose('client', 'tcp_open_received', { streamId, host: tcpMeta.host, port: tcpMeta.port });
+    tcpHandler.handleServerFrame(type, currentWs, streamId, payload, streams.get(streamId));
     return;
   }
 
@@ -473,8 +492,9 @@ function connect() {
   });
 
   ws.on('open', () => {
-    console.log('[client] Connected to tunnel server');
+    logStandard('client', 'connected');
     reconnectDelay = 1000;
+    reconnectAttempt = 0;
     authFailed = false;
 
     // Signal readiness for installer polling
@@ -495,6 +515,7 @@ function connect() {
       if (ws && ws.readyState === WebSocket.OPEN) {
         try {
           ws.ping();
+          logVerbose('client', 'heartbeat_sent', {});
         } catch {
           // ignore
         }
@@ -509,7 +530,7 @@ function connect() {
   });
 
   ws.on('close', (code, reason) => {
-    console.log(`[client] Connection closed: ${code} ${reason || ''}`);
+    logStandard('client', 'disconnected', { code, reason: reason?.toString() || '' });
 
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
@@ -522,16 +543,16 @@ function connect() {
 
   ws.on('error', (err) => {
     if (err.message === 'Unexpected server response: 401') {
-      console.error('[client] Authentication failed. Check username/password.');
+      logStandard('client', 'auth_failed');
       authFailed = true;
       return;
     }
 
-    console.error(`[client] WebSocket error: ${err.message}`);
+    logStandard('client', 'error', { message: err.message });
   });
 
   ws.on('pong', () => {
-    // Heartbeat response received
+    logVerbose('client', 'heartbeat_received', {});
   });
 }
 
@@ -541,21 +562,50 @@ function scheduleReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer);
 
   reconnectTimer = setTimeout(() => {
-    console.log(`[client] Reconnecting in ${reconnectDelay / 1000}s...`);
+    reconnectAttempt += 1;
+    logStandard('client', 'reconnect', { attempt: reconnectAttempt, delay_ms: reconnectDelay });
     connect();
   }, reconnectDelay);
-
-  if (reconnectTimer.unref) reconnectTimer.unref();
 
   // Exponential backoff, max 30s
   reconnectDelay = Math.min(reconnectDelay * 2, 30000);
 }
 
 // ---------------------------------------------------------------------------
+// Shutdown
+// ---------------------------------------------------------------------------
+
+function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
+  logStandard('client', 'shutdown');
+
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+
+  if (ws) {
+    try {
+      ws.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  setTimeout(() => process.exit(0), 50).unref();
+}
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-console.log(`[client] Target origin: ${TARGET_ORIGIN}`);
-console.log(`[client] Server URL: ${SERVER_URL}`);
+logStandard('client', 'start', { target_origin: TARGET_ORIGIN, server_url: SERVER_URL });
 
 connect();

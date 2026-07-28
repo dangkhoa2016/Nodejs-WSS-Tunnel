@@ -3,8 +3,20 @@ import { WebSocketServer } from 'ws';
 import { ClientManager } from './ClientManager.js';
 import { HttpRouter } from './HttpRouter.js';
 import { StreamManager } from './StreamManager.js';
+import { TcpAgentServer } from './TcpAgentServer.js';
 import { TcpRouter } from './TcpRouter.js';
-import { INSTALL_UUID, PORT, SERVER_HOST, TUNNEL_PATH, WS_MAX_PAYLOAD, validateConfig } from './config.js';
+import {
+  INSTALL_UUID,
+  PORT,
+  SERVER_HOST,
+  TCP_AGENT_ALLOWED_PORTS,
+  TCP_AGENT_MAX_STREAMS_PER_AGENT,
+  TCP_AGENT_PATH,
+  TCP_MAX_CONNECTIONS_PER_PORT,
+  TUNNEL_PATH,
+  WS_MAX_PAYLOAD,
+  validateConfig,
+} from './config.js';
 import { logStandard, logVerbose } from './logger.js';
 
 const GRACEFUL_TIMEOUT_MS = 10_000;
@@ -30,9 +42,15 @@ export class TunnelServer {
     this.clientManager = new ClientManager(this.streamManager);
     this.httpRouter = new HttpRouter(this.streamManager, this.clientManager);
     this.tcpRouter = new TcpRouter(this.streamManager, this.clientManager);
+    this.tcpAgentServer = new TcpAgentServer(this.streamManager, this.tcpRouter, {
+      allowedPorts: TCP_AGENT_ALLOWED_PORTS,
+      maxConnectionsPerPort: TCP_MAX_CONNECTIONS_PER_PORT,
+      maxStreamsPerAgent: TCP_AGENT_MAX_STREAMS_PER_AGENT,
+    });
 
     this._server = null;
     this._wss = null;
+    this._agentWss = null;
     this._shuttingDown = false;
     this._closePromise = null;
   }
@@ -48,8 +66,10 @@ export class TunnelServer {
     const results = await Promise.allSettled([
       this.tcpRouter.close(),
       this.clientManager.close(),
+      this.tcpAgentServer.close(),
       closeWithCallback(this._server),
       closeWithCallback(this._wss),
+      closeWithCallback(this._agentWss),
     ]);
 
     for (const r of results) {
@@ -128,12 +148,22 @@ export class TunnelServer {
       perMessageDeflate: false,
     });
 
+    const agentEnabled = TCP_AGENT_ALLOWED_PORTS.length > 0;
+    this._agentWss = agentEnabled
+      ? new WebSocketServer({
+          noServer: true,
+          clientTracking: false,
+          maxPayload: WS_MAX_PAYLOAD,
+          perMessageDeflate: false,
+        })
+      : null;
+
     this._server.on('upgrade', (req, socket, head) => {
       logVerbose('ws', 'upgrade', {
         url: req.url,
         remoteAddr: req.socket?.remoteAddress,
       });
-      this.httpRouter.handleUpgrade(req, socket, head, this._wss);
+      this.httpRouter.handleUpgrade(req, socket, head, this._wss, this._agentWss);
     });
 
     this._wss.on('connection', (ws, req) => {
@@ -143,6 +173,14 @@ export class TunnelServer {
       });
       this.clientManager.addClient(ws);
     });
+
+    if (this._agentWss) {
+      this._agentWss.on('connection', (ws, req) => {
+        logVerbose('ws', 'agent_connect', { remoteAddr: req?.socket?.remoteAddress });
+        this.tcpAgentServer.handleConnection(ws);
+      });
+      this.tcpAgentServer.startHeartbeat();
+    }
 
     this.clientManager.startHeartbeat();
 
@@ -155,6 +193,10 @@ export class TunnelServer {
       });
       console.log(`[server] HTTP + WebSocket tunnel listening on 0.0.0.0:${PORT}`);
       console.log(`[server] Tunnel path: ${TUNNEL_PATH}`);
+      if (agentEnabled) {
+        console.log(`[server] TCP agent path: ${TCP_AGENT_PATH}`);
+        console.log(`[server] Agent allowed ports: ${TCP_AGENT_ALLOWED_PORTS.join(',')}`);
+      }
       console.log('[server] Health check: /__health');
       console.log(`[server] Install UUID: ${INSTALL_UUID}`);
       console.log(`[server] Install URL: ${SERVER_HOST}/${INSTALL_UUID}-install`);

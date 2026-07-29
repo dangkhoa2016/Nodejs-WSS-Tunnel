@@ -204,6 +204,14 @@ export class StreamManager {
 
     logVerbose('stream', 'tcp_abort', { streamId: state.id, reason, notifyClient });
 
+    if (typeof state.socket?.abort === 'function') {
+      try {
+        state.socket.abort(reason || 'TCP stream aborted');
+      } catch {
+        /* ignore */
+      }
+    }
+
     if (notifyClient && state.ws && state.ws.readyState === WS_OPEN && !state.abortSent) {
       state.abortSent = true;
       sendJsonFrame(state.ws, PROTO.TYPE.TCP_ABORT, state.id, {
@@ -475,6 +483,20 @@ export class StreamManager {
         case PROTO.TYPE.TCP_CLOSE: {
           if (state.mode !== 'tcp') return;
           this.cleanupTcpStream(state);
+          break;
+        }
+
+        case PROTO.TYPE.TCP_OPEN_ACK: {
+          if (state.mode !== 'tcp' || !state.awaitingClientAck) return;
+          state.awaitingClientAck = false;
+          logVerbose('stream', 'tcp_open_ack', { streamId });
+          if (typeof state.onClientOpenConfirmed === 'function') {
+            try {
+              state.onClientOpenConfirmed();
+            } catch {
+              // ignore
+            }
+          }
           break;
         }
 

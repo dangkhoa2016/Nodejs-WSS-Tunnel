@@ -57,9 +57,11 @@ async function startTunnelServer(port, username, password) {
   const prevPort = process.env.PORT;
   const prevUser = process.env.TUNNEL_USERNAME;
   const prevPass = process.env.TUNNEL_PASSWORD;
+  const prevInstallUuid = process.env.INSTALL_UUID;
   process.env.PORT = String(port);
   process.env.TUNNEL_USERNAME = username;
   process.env.TUNNEL_PASSWORD = password;
+  process.env.INSTALL_UUID = 'e2e-install';
   try {
     const { TunnelServer } = await import('../src/TunnelServer.js');
     const server = new TunnelServer();
@@ -70,6 +72,7 @@ async function startTunnelServer(port, username, password) {
     restoreEnv('PORT', prevPort);
     restoreEnv('TUNNEL_USERNAME', prevUser);
     restoreEnv('TUNNEL_PASSWORD', prevPass);
+    restoreEnv('INSTALL_UUID', prevInstallUuid);
   }
 }
 
@@ -104,6 +107,7 @@ function runInstaller(workDir, tunnelPort, echoPort, homeDir, timeoutMs) {
       TUNNEL_USERNAME: 'admin',
       TUNNEL_PASSWORD: 'secret',
       TARGET_ORIGIN: `http://127.0.0.1:${echoPort}`,
+      INSTALL_UUID: 'e2e-install',
     },
     timeout: timeoutMs,
   });

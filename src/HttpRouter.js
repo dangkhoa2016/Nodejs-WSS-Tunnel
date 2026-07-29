@@ -2,7 +2,20 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { ADMIN_SECRET, INSTALL_UUID, MAX_CONCURRENT_STREAMS, SERVER_HOST, TUNNEL_PATH } from './config.js';
+import {
+  ADMIN_SECRET,
+  INSTALL_UUID,
+  MAX_CONCURRENT_STREAMS,
+  SERVER_HOST,
+  TCP_AGENT_ALLOWED_ORIGINS,
+  TCP_AGENT_PASSWORD,
+  TCP_AGENT_PATH,
+  TCP_AGENT_REQUIRE_TLS,
+  TCP_AGENT_TRUSTED_PROXIES,
+  TCP_AGENT_USERNAME,
+  TUNNEL_PATH,
+} from './config.js';
+import { isIpAllowed } from './ipAllowlist.js';
 import { getConfig, logStandard, logVerbose, setConfig } from './logger.js';
 import { FrameCodec, PROTO } from './protocol.js';
 import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils.js';
@@ -10,6 +23,17 @@ import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+export function isAgentRequestSecure(req, trustedProxies) {
+  if (req.socket?.encrypted) return true;
+  if (!trustedProxies || trustedProxies.length === 0) return false;
+  if (!isIpAllowed(req.socket?.remoteAddress, trustedProxies)) return false;
+  const proto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return proto === 'https';
+}
 
 export class HttpRouter {
   constructor(streamManager, clientManager) {
@@ -156,6 +180,12 @@ export class HttpRouter {
       return;
     }
 
+    if (pathname === TCP_AGENT_PATH) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not found');
+      return;
+    }
+
     this._proxyHttpRequest(req, res);
   }
 
@@ -197,7 +227,7 @@ export class HttpRouter {
     }
   }
 
-  handleUpgrade(req, socket, head, wss) {
+  handleUpgrade(req, socket, head, wss, agentWss = null) {
     let pathname;
     try {
       const parsedUrl = new URL(req.url, 'http://localhost');
@@ -206,37 +236,74 @@ export class HttpRouter {
       pathname = req.url.split('?')[0];
     }
 
-    if (pathname !== TUNNEL_PATH) {
-      try {
-        socket.write('HTTP/1.1 501 Not Implemented\r\n' + 'Connection: close\r\n' + '\r\n');
-      } catch {
-        // ignore
+    if (pathname === TCP_AGENT_PATH) {
+      if (!agentWss) {
+        this._rejectUpgrade(socket, 'HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n');
+        return;
       }
 
-      socket.destroy();
-      return;
-    }
+      if (TCP_AGENT_REQUIRE_TLS && !isAgentRequestSecure(req, TCP_AGENT_TRUSTED_PROXIES)) {
+        logStandard('auth', 'agent_ws_reject', { pathname, reason: 'tls_required' });
+        this._rejectUpgrade(socket, 'HTTP/1.1 426 Upgrade Required\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+        return;
+      }
 
-    if (!verifyBasicAuth(req)) {
-      logStandard('auth', 'ws_reject', { pathname, reason: 'invalid_credentials' });
-      try {
-        socket.write(
+      const origin = req.headers.origin;
+      if (origin && TCP_AGENT_ALLOWED_ORIGINS.length > 0 && !TCP_AGENT_ALLOWED_ORIGINS.includes(origin)) {
+        logStandard('auth', 'agent_ws_reject', { pathname, reason: 'origin_not_allowed', origin });
+        this._rejectUpgrade(socket, 'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+        return;
+      }
+
+      if (!verifyBasicAuth(req, TCP_AGENT_USERNAME, TCP_AGENT_PASSWORD)) {
+        logStandard('auth', 'agent_ws_reject', { pathname, reason: 'invalid_credentials' });
+        this._rejectUpgrade(
+          socket,
           'HTTP/1.1 401 Unauthorized\r\n' +
             'WWW-Authenticate: Basic realm="tunnel"\r\n' +
             'Connection: close\r\n' +
             'Content-Length: 0\r\n' +
             '\r\n',
         );
-      } catch {
-        // ignore
+        return;
       }
-      socket.destroy();
+
+      agentWss.handleUpgrade(req, socket, head, (ws) => {
+        agentWss.emit('connection', ws, req);
+      });
+      return;
+    }
+
+    if (pathname !== TUNNEL_PATH) {
+      this._rejectUpgrade(socket, 'HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n');
+      return;
+    }
+
+    if (!verifyBasicAuth(req)) {
+      logStandard('auth', 'ws_reject', { pathname, reason: 'invalid_credentials' });
+      this._rejectUpgrade(
+        socket,
+        'HTTP/1.1 401 Unauthorized\r\n' +
+          'WWW-Authenticate: Basic realm="tunnel"\r\n' +
+          'Connection: close\r\n' +
+          'Content-Length: 0\r\n' +
+          '\r\n',
+      );
       return;
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req);
     });
+  }
+
+  _rejectUpgrade(socket, responseText) {
+    try {
+      socket.write(responseText);
+    } catch {
+      // ignore
+    }
+    socket.destroy();
   }
 
   _proxyHttpRequest(req, res) {

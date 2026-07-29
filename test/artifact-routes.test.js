@@ -96,7 +96,7 @@ test('artifact routes', async (t) => {
   const installRes = await get(PORT, `/${INSTALL_UUID}-install`);
   assert.equal(installRes.status, 200);
   assert.ok(installRes.body.includes(INSTALL_UUID), 'install script must embed INSTALL_UUID');
-  assert.ok(!installRes.body.includes('{{INSTALL_UUID}}'), 'install script must not contain placeholder');
+  assert.ok(!installRes.body.includes('__INSTALL_UUID__'), 'install script must not contain placeholder');
 
   const bundleRes = await get(PORT, `/${INSTALL_UUID}-client.js`);
   assert.equal(bundleRes.status, 200);

@@ -6,14 +6,15 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 const MINIMAL_PKG = JSON.stringify({ name: 'test-client', version: '1.0.0', type: 'module', private: true });
+const INSTALL_UUID = 'test-install';
 
-function createTestServer(port, bundlePath, pkgContent) {
+function createTestServer(port, bundlePath, pkgContent, installUuid) {
   const bundle = fs.readFileSync(bundlePath);
   return http.createServer((req, res) => {
-    if (req.url === '/client.js') {
+    if (req.url === `/${installUuid}-client.js`) {
       res.writeHead(200, { 'Content-Type': 'application/javascript' });
       res.end(bundle);
-    } else if (req.url === '/client-package.json') {
+    } else if (req.url === `/${installUuid}-client-package.json`) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(pkgContent);
     } else {
@@ -34,6 +35,7 @@ function runInstaller(workDir, port, timeoutMs, envOverrides = {}) {
         TUNNEL_USERNAME: 'admin',
         TUNNEL_PASSWORD: 'secret',
         TARGET_ORIGIN: 'http://127.0.0.1:8080',
+        INSTALL_UUID,
         ...envOverrides,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -73,7 +75,7 @@ test('installer fails on invalid bundle and cleans up', async (t) => {
   fs.writeFileSync(invalidBundle, 'not valid javascript {{{');
 
   const port = 18789;
-  const server = createTestServer(port, invalidBundle, MINIMAL_PKG);
+  const server = createTestServer(port, invalidBundle, MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server.listen(port, r));
   t.after(async () => {
     await new Promise((r) => server.close(r));
@@ -101,7 +103,7 @@ test('installer rejects stale readiness', async (t) => {
   fs.writeFileSync(path.join(workDir, 'client.ready'), stalePid);
 
   const port = 18790;
-  const server = createTestServer(port, 'test/fixtures/client-never-ready.js', MINIMAL_PKG);
+  const server = createTestServer(port, 'test/fixtures/client-never-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server.listen(port, r));
   t.after(async () => {
     await new Promise((r) => server.close(r));
@@ -122,7 +124,7 @@ test('installer succeeds with a client that writes readiness', async (t) => {
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
   const port = 18791;
-  const server = createTestServer(port, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG);
+  const server = createTestServer(port, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server.listen(port, r));
   t.after(async () => {
     await new Promise((r) => server.close(r));
@@ -178,7 +180,7 @@ test('creates unique release directories even with identical timestamps', async 
   fs.chmodSync(path.join(binDir, 'date'), 0o755);
 
   const port1 = 18793;
-  const server1 = createTestServer(port1, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG);
+  const server1 = createTestServer(port1, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server1.listen(port1, r));
   t.after(() => server1.close());
 
@@ -187,7 +189,7 @@ test('creates unique release directories even with identical timestamps', async 
   assert.equal(result1.status, 0, `first install should succeed\n${result1.stderr}`);
 
   const port2 = 18794;
-  const server2 = createTestServer(port2, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG);
+  const server2 = createTestServer(port2, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server2.listen(port2, r));
   t.after(() => server2.close());
 
@@ -218,7 +220,7 @@ test('first install failure leaves no dangling state', async (t) => {
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
   const port = 18797;
-  const server = createTestServer(port, 'test/fixtures/client-never-ready.js', MINIMAL_PKG);
+  const server = createTestServer(port, 'test/fixtures/client-never-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server.listen(port, r));
   t.after(async () => {
     await new Promise((r) => server.close(r));
@@ -249,7 +251,7 @@ test('removes failed release after rollback', async (t) => {
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
   const port1 = 18795;
-  const server1 = createTestServer(port1, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG);
+  const server1 = createTestServer(port1, 'test/fixtures/client-writes-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server1.listen(port1, r));
   t.after(() => server1.close());
 
@@ -265,7 +267,7 @@ test('removes failed release after rollback', async (t) => {
   const beforeReleases = fs.readdirSync(releasesDir);
 
   const port2 = 18796;
-  const server2 = createTestServer(port2, 'test/fixtures/client-never-ready.js', MINIMAL_PKG);
+  const server2 = createTestServer(port2, 'test/fixtures/client-never-ready.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server2.listen(port2, r));
   t.after(() => server2.close());
 
@@ -291,7 +293,7 @@ test('installer passes explicit environment to client', async (t) => {
   t.after(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
   const port = 18792;
-  const server = createTestServer(port, 'test/fixtures/client-captures-env.js', MINIMAL_PKG);
+  const server = createTestServer(port, 'test/fixtures/client-captures-env.js', MINIMAL_PKG, INSTALL_UUID);
   await new Promise((r) => server.listen(port, r));
   t.after(async () => {
     await new Promise((r) => server.close(r));

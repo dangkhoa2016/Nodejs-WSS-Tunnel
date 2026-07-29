@@ -85,24 +85,33 @@ test('artifact routes', async (t) => {
 
   const installRes = await get(PORT, `/${INSTALL_UUID}-install`);
   assert.equal(installRes.status, 200);
+  assert.ok(installRes.body.includes(INSTALL_UUID), 'install script must embed INSTALL_UUID');
+  assert.ok(!installRes.body.includes('{{INSTALL_UUID}}'), 'install script must not contain placeholder');
 
-  const bundleRes = await get(PORT, '/client.js');
+  const bundleRes = await get(PORT, `/${INSTALL_UUID}-client.js`);
   assert.equal(bundleRes.status, 200);
 
-  const pkgRes = await get(PORT, '/client-package.json');
+  const pkgRes = await get(PORT, `/${INSTALL_UUID}-client-package.json`);
   assert.equal(pkgRes.status, 200);
   assert.equal(JSON.parse(pkgRes.body).name, 'tunnel-client');
 
-  const agentRes = await get(PORT, '/tcp-agent.js');
+  const agentRes = await get(PORT, `/${INSTALL_UUID}-tcp-agent.js`);
   assert.equal(agentRes.status, 200);
 
-  const agentPkgRes = await get(PORT, '/tcp-agent-package.json');
+  const agentPkgRes = await get(PORT, `/${INSTALL_UUID}-tcp-agent-package.json`);
   assert.equal(agentPkgRes.status, 200);
   assert.equal(JSON.parse(agentPkgRes.body).name, 'tunnel-tcp-agent');
 
-  const disabledAgentRes = await get(DISABLED_PORT, '/tcp-agent.js');
+  const disabledAgentRes = await get(DISABLED_PORT, `/${INSTALL_UUID}-tcp-agent.js`);
   assert.equal(disabledAgentRes.status, 404);
 
-  const disabledAgentPkgRes = await get(DISABLED_PORT, '/tcp-agent-package.json');
+  const disabledAgentPkgRes = await get(DISABLED_PORT, `/${INSTALL_UUID}-tcp-agent-package.json`);
   assert.equal(disabledAgentPkgRes.status, 404);
+
+  // Old short paths must no longer serve artifacts; they fall through to the
+  // tunnel proxy, which returns 503 when no client is connected.
+  for (const oldPath of ['/client.js', '/client-package.json', '/tcp-agent.js', '/tcp-agent-package.json']) {
+    const oldRes = await get(PORT, oldPath);
+    assert.equal(oldRes.status, 503, `old path ${oldPath} must no longer be served`);
+  }
 });

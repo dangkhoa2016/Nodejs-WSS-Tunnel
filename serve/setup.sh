@@ -17,6 +17,7 @@ SERVER_URL="${TUNNEL_SERVER_URL:-}"
 USERNAME="${TUNNEL_USERNAME:-}"
 PASSWORD="${TUNNEL_PASSWORD:-}"
 TARGET="${TARGET_ORIGIN:-http://127.0.0.1:8000}"
+INSTALL_UUID="${INSTALL_UUID:-{{INSTALL_UUID}}}"
 READY_FILE="${WORK_DIR}/client.ready"
 TUNNEL_PROMPT_INPUT="${TUNNEL_PROMPT_INPUT:-/dev/tty}"
 LINK_NAME="current"
@@ -217,14 +218,14 @@ trap cleanup_release EXIT
 
 # --- Stage: download and validate new artifacts ---
 info "Fetching client bundle..."
-download_atomic "${BASE_URL}/client.js" "${RELEASE_DIR}/client.js"
+download_atomic "${BASE_URL}/${INSTALL_UUID}-client.js" "${RELEASE_DIR}/client.js"
 
 info "Validating bundle..."
 node --check "${RELEASE_DIR}/client.js"
 info "Bundle OK"
 
 info "Fetching client package manifest..."
-download_atomic "${BASE_URL}/client-package.json" "${RELEASE_DIR}/package.json"
+download_atomic "${BASE_URL}/${INSTALL_UUID}-client-package.json" "${RELEASE_DIR}/package.json"
 
 cat > "${RELEASE_DIR}/.env" <<EOF
 TUNNEL_SERVER_URL=${WS_URL}

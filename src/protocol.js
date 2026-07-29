@@ -21,6 +21,7 @@ export const PROTO = Object.freeze({
     TCP_DATA: 0x41,
     TCP_CLOSE: 0x42,
     TCP_ABORT: 0x43,
+    TCP_OPEN_ACK: 0x44,
 
     // TCP agent over WebSocket frame types
     TCP_CONNECT: 0x50,

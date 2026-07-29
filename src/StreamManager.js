@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { syncSocketReadState } from './TcpFlowControl.js';
+import { syncSocketReadState, syncTcpBackpressure } from './TcpFlowControl.js';
 import { WsFrameWriter } from './WsFrameWriter.js';
 import { MAX_DEST_BUFFER_BYTES, STREAM_IDLE_TIMEOUT_MS } from './config.js';
 import { logVerbose } from './logger.js';
@@ -155,7 +155,9 @@ export class StreamManager {
       abortSent: false,
       requestEnded: false,
 
-      localWriteBackpressured: false,
+      agentPaused: false,
+      wsBackpressured: false,
+      clientPausedForAgent: false,
       peerPausedRead: false,
       timer: null,
       onCleanup: null,
@@ -166,9 +168,9 @@ export class StreamManager {
 
     socket.on('drain', () => {
       if (state.cleaned) return;
-      if (state.localWriteBackpressured && state.ws.readyState === WS_OPEN) {
-        state.localWriteBackpressured = false;
-        sendFrame(state.ws, FrameCodec.buildFrame(PROTO.TYPE.RESUME, state.id));
+      if (state.wsBackpressured) {
+        state.wsBackpressured = false;
+        syncTcpBackpressure(state);
       }
     });
 
@@ -470,9 +472,9 @@ export class StreamManager {
           if (!state.socket || state.socket.destroyed) return;
           try {
             const ok = state.socket.write(payload);
-            if (!ok && !state.localWriteBackpressured) {
-              state.localWriteBackpressured = true;
-              sendFrame(state.ws, FrameCodec.buildFrame(PROTO.TYPE.PAUSE, state.id));
+            if (!ok && !state.wsBackpressured) {
+              state.wsBackpressured = true;
+              syncTcpBackpressure(state);
             }
           } catch {
             this.abortTcpStream(state, 'Failed to write TCP socket', true);

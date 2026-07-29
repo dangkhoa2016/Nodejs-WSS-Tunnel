@@ -218,7 +218,7 @@ export class HttpRouter {
   _serveInstallScript(res) {
     try {
       let content = fs.readFileSync(path.join(PROJECT_ROOT, 'serve', 'setup.sh'), 'utf8');
-      content = content.replaceAll('{{INSTALL_UUID}}', INSTALL_UUID);
+      content = content.replaceAll('__INSTALL_UUID__', INSTALL_UUID);
       res.writeHead(200, {
         'Content-Type': 'application/x-sh',
         'Cache-Control': 'no-store',

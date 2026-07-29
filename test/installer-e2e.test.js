@@ -48,6 +48,17 @@ function getWorkDir(sandbox) {
   return path.join(sandbox, '.tunnel-client');
 }
 
+function readClientDiagnostics(workDir) {
+  const parts = [];
+  for (const name of ['client.log', 'client.pid', 'client.ready']) {
+    const filePath = path.join(workDir, name);
+    if (fs.existsSync(filePath)) {
+      parts.push(`--- ${name} ---\n${fs.readFileSync(filePath, 'utf8')}`);
+    }
+  }
+  return parts.join('\n');
+}
+
 function restoreEnv(name, prevValue) {
   if (prevValue === undefined) delete process.env[name];
   else process.env[name] = prevValue;
@@ -57,9 +68,11 @@ async function startTunnelServer(port, username, password) {
   const prevPort = process.env.PORT;
   const prevUser = process.env.TUNNEL_USERNAME;
   const prevPass = process.env.TUNNEL_PASSWORD;
+  const prevInstallUuid = process.env.INSTALL_UUID;
   process.env.PORT = String(port);
   process.env.TUNNEL_USERNAME = username;
   process.env.TUNNEL_PASSWORD = password;
+  process.env.INSTALL_UUID = 'e2e-install';
   try {
     const { TunnelServer } = await import('../src/TunnelServer.js');
     const server = new TunnelServer();
@@ -70,6 +83,7 @@ async function startTunnelServer(port, username, password) {
     restoreEnv('PORT', prevPort);
     restoreEnv('TUNNEL_USERNAME', prevUser);
     restoreEnv('TUNNEL_PASSWORD', prevPass);
+    restoreEnv('INSTALL_UUID', prevInstallUuid);
   }
 }
 
@@ -104,6 +118,7 @@ function runInstaller(workDir, tunnelPort, echoPort, homeDir, timeoutMs) {
       TUNNEL_USERNAME: 'admin',
       TUNNEL_PASSWORD: 'secret',
       TARGET_ORIGIN: `http://127.0.0.1:${echoPort}`,
+      INSTALL_UUID: 'e2e-install',
     },
     timeout: timeoutMs,
   });
@@ -134,15 +149,19 @@ function tunneledRequest(tunnelPort, method, urlPath, body) {
 test('E2E: first install, upgrade, and rollback', async (t) => {
   const sandbox = fs.mkdtempSync('/tmp/installer-e2e-');
   const workDir = getWorkDir(sandbox);
+  const buildDir = path.join(sandbox, 'build');
   fs.mkdirSync(workDir, { recursive: true });
 
   const cleanupOps = [];
 
-  const buildResult = await spawnProcess('node', ['serve/build.js'], { cwd: process.cwd() });
+  const buildResult = await spawnProcess('node', ['serve/build.js'], {
+    cwd: process.cwd(),
+    env: { ...process.env, OUT_DIR: buildDir },
+  });
   assert.equal(buildResult.status, 0, 'client build failed');
-  assert.ok(fs.existsSync('dist/client.js'), 'dist/client.js missing after build');
+  assert.ok(fs.existsSync(path.join(buildDir, 'client.js')), 'client.js missing after build');
 
-  const bundleBefore = fs.readFileSync('dist/client.js');
+  const bundleBefore = fs.readFileSync(path.join(buildDir, 'client.js'));
   t.after(async () => {
     const pidFile = path.join(workDir, 'client.pid');
     if (fs.existsSync(pidFile)) {
@@ -151,10 +170,14 @@ test('E2E: first install, upgrade, and rollback', async (t) => {
       } catch {}
     }
     for (const fn of cleanupOps.reverse()) await fn();
-    assert.deepEqual(fs.readFileSync('dist/client.js'), bundleBefore, 'E2E must not mutate the generated artifact');
+    assert.deepEqual(
+      fs.readFileSync(path.join(buildDir, 'client.js')),
+      bundleBefore,
+      'E2E must not mutate the generated artifact',
+    );
     fs.rmSync(sandbox, { recursive: true, force: true });
   });
-  const goodBundle = fs.readFileSync('dist/client.js');
+  const goodBundle = fs.readFileSync(path.join(buildDir, 'client.js'));
   const badBundle = fs.readFileSync('test/fixtures/client-never-ready.js');
   let activeBundle = goodBundle;
 
@@ -177,7 +200,11 @@ test('E2E: first install, upgrade, and rollback', async (t) => {
 
   // ---- First install ----
   const install1 = await runInstaller(workDir, 18792, echo.port, sandbox, 25000);
-  assert.equal(install1.status, 0, `First install failed\nstdout: ${install1.stdout}\nstderr: ${install1.stderr}`);
+  assert.equal(
+    install1.status,
+    0,
+    `First install failed\nstdout: ${install1.stdout}\nstderr: ${install1.stderr}\n${readClientDiagnostics(workDir)}`,
+  );
 
   const readyFile = path.join(workDir, 'client.ready');
   assert.ok(fs.existsSync(readyFile), 'client.ready must exist');
@@ -204,7 +231,11 @@ test('E2E: first install, upgrade, and rollback', async (t) => {
 
   // ---- Upgrade: second install ----
   const install2 = await runInstaller(workDir, 18792, echo.port, sandbox, 25000);
-  assert.equal(install2.status, 0, `Upgrade failed\nstdout: ${install2.stdout}\nstderr: ${install2.stderr}`);
+  assert.equal(
+    install2.status,
+    0,
+    `Upgrade failed\nstdout: ${install2.stdout}\nstderr: ${install2.stderr}\n${readClientDiagnostics(workDir)}`,
+  );
 
   const pid2 = Number(fs.readFileSync(readyFile, 'utf8').trim());
   assert.notEqual(pid2, pid1, 'PID must change after upgrade');
@@ -225,7 +256,7 @@ test('E2E: first install, upgrade, and rollback', async (t) => {
   assert.equal(
     install3.status,
     0,
-    `rollback upgrade should restore a working client\nstdout: ${install3.stdout}\nstderr: ${install3.stderr}`,
+    `rollback upgrade should restore a working client\nstdout: ${install3.stdout}\nstderr: ${install3.stderr}\n${readClientDiagnostics(workDir)}`,
   );
 
   const pid3 = Number(fs.readFileSync(readyFile, 'utf8').trim());
@@ -244,5 +275,9 @@ test('E2E: first install, upgrade, and rollback', async (t) => {
   assert.ok(res2.body.includes('echo:'), `Post-rollback response should contain echo: ${res2.body}`);
   assert.ok(res2.body.includes('/verify-rollback'), `Post-rollback response should contain path: ${res2.body}`);
 
-  assert.deepEqual(fs.readFileSync('dist/client.js'), bundleBefore, 'E2E must not mutate the generated artifact');
+  assert.deepEqual(
+    fs.readFileSync(path.join(buildDir, 'client.js')),
+    bundleBefore,
+    'E2E must not mutate the generated artifact',
+  );
 });

@@ -102,6 +102,7 @@ jobs:
             -e TUNNEL_PASSWORD=secret \
             -e SERVER_HOST=http://127.0.0.1:7860 \
             -e TCP_AGENT_ALLOWED_PORTS=6379 \
+            -e INSTALL_UUID=ci-install \
             --name tunnel-server-test \
             tunnel-server
           for i in $(seq 1 20); do
@@ -114,12 +115,12 @@ jobs:
           curl -fsS --max-time 10 http://127.0.0.1:7860/__health | grep -q ok || exit 1
       - name: Verify artifact routes served from container
         run: |
-          curl -sf --max-time 10 http://127.0.0.1:7860/client.js -o /tmp/client.js
+          curl -sf --max-time 10 http://127.0.0.1:7860/ci-install-client.js -o /tmp/client.js
           node --check /tmp/client.js
-          curl -sf --max-time 10 http://127.0.0.1:7860/client-package.json | grep -q 'tunnel-client'
-          curl -sf --max-time 10 http://127.0.0.1:7860/tcp-agent.js -o /tmp/tcp-agent.js
+          curl -sf --max-time 10 http://127.0.0.1:7860/ci-install-client-package.json | grep -q 'tunnel-client'
+          curl -sf --max-time 10 http://127.0.0.1:7860/ci-install-tcp-agent.js -o /tmp/tcp-agent.js
           node --check /tmp/tcp-agent.js
-          curl -sf --max-time 10 http://127.0.0.1:7860/tcp-agent-package.json | grep -q 'tunnel-tcp-agent'
+          curl -sf --max-time 10 http://127.0.0.1:7860/ci-install-tcp-agent-package.json | grep -q 'tunnel-tcp-agent'
       - name: Run installer and verify upgrade + tunneled requests
         run: |
           set -euo pipefail
@@ -153,6 +154,7 @@ jobs:
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
+          INSTALL_UUID=ci-install \
             bash serve/setup.sh 2>&1
           FIRST_RELEASE="$(readlink "${CLIENT_DIR}/current")"
           FIRST_PID="$(cat "${CLIENT_DIR}/client.pid")"
@@ -175,6 +177,7 @@ jobs:
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
+          INSTALL_UUID=ci-install \
             bash serve/setup.sh 2>&1
           SECOND_RELEASE="$(readlink "${CLIENT_DIR}/current")"
           SECOND_PID="$(cat "${CLIENT_DIR}/client.pid")"
@@ -199,7 +202,7 @@ jobs:
           node -e "
             const http=require('http'),net=require('net');
             http.createServer((q,r)=>{
-              if(q.url==='/client.js'){r.writeHead(200,{'Content-Type':'application/javascript'});r.end('setInterval(()=>{},1000);');return}
+              if(q.url==='/ci-install-client.js'){r.writeHead(200,{'Content-Type':'application/javascript'});r.end('setInterval(()=>{},1000);');return}
               const o=http.request({hostname:'127.0.0.1',port:7860,path:q.url,method:q.method,headers:q.headers},p=>{r.writeHead(p.statusCode,p.headers);p.pipe(r)})
               o.on('error',()=>{r.writeHead(502);r.end()});q.pipe(o)
             }).on('upgrade',(q,sk,head)=>{
@@ -216,14 +219,14 @@ jobs:
           # Wait for proxy readiness
           for i in $(seq 1 20); do
             if curl -sf --max-time 5 \
-              http://127.0.0.1:7861/client-package.json \
+              http://127.0.0.1:7861/ci-install-client-package.json \
               >/dev/null 2>&1; then
               break
             fi
             sleep 0.25
           done
           curl -fsS --max-time 10 \
-            http://127.0.0.1:7861/client-package.json \
+            http://127.0.0.1:7861/ci-install-client-package.json \
             >/dev/null
           kill -0 "$ARTIFACT_PROXY_PID"
 
@@ -233,6 +236,7 @@ jobs:
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
+          INSTALL_UUID=ci-install \
             bash serve/setup.sh 2>&1 && ROLLBACK_EXIT=$? || ROLLBACK_EXIT=$?
           echo "=== Client log after third install ==="
           cat "${CLIENT_DIR}/client.log" 2>/dev/null || true
@@ -299,9 +303,9 @@ jobs:
           curl -fsS --max-time 5 http://127.0.0.1:7860/__health || exit 1
       - name: Verify artifact routes
         run: |
-          curl -sf --max-time 10 http://127.0.0.1:7860/client.js -o /tmp/client.js
+          curl -sf --max-time 10 http://127.0.0.1:7860/ci-install-client.js -o /tmp/client.js
           node --check /tmp/client.js
-          curl -sf --max-time 10 http://127.0.0.1:7860/client-package.json -o /tmp/pkg.json
+          curl -sf --max-time 10 http://127.0.0.1:7860/ci-install-client-package.json -o /tmp/pkg.json
           node -e "
             const p = JSON.parse(require('fs').readFileSync('/tmp/pkg.json','utf8'));
             console.log('Manifest:', p.name);
@@ -314,6 +318,7 @@ jobs:
           TUNNEL_USERNAME=admin \
           TUNNEL_PASSWORD=secret \
           TARGET_ORIGIN=http://127.0.0.1:8080 \
+          INSTALL_UUID=ci-install \
             bash serve/setup.sh 2>&1
           ls -la "$SANDBOX/.tunnel-client/"
       - name: Verify client connects

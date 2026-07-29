@@ -68,8 +68,21 @@ export class TcpAgentServer {
       }
 
       const state = this.streamManager.streams.get(streamId);
-      if (!state || state.mode !== 'tcp' || !state.socket?.isVirtual) return;
-      if (state.agentWs !== ws) return;
+      if (!state || state.mode !== 'tcp' || !state.socket?.isVirtual) {
+        logVerbose('tcp', 'agent_stream_missing', { streamId, type, reason: 'stream_not_found' });
+        if (type === PROTO.TYPE.TCP_DATA || type === PROTO.TYPE.TCP_CLOSE) {
+          sendJsonFrame(ws, PROTO.TYPE.TCP_ABORT, streamId, { message: 'Stream not found' });
+        }
+        return;
+      }
+      if (state.agentWs !== ws) {
+        logVerbose('tcp', 'agent_ws_mismatch', { streamId, type });
+        return;
+      }
+      if (state.awaitingClientAck) {
+        logVerbose('tcp', 'agent_frame_before_open_ack', { streamId, type });
+        return;
+      }
 
       switch (type) {
         case PROTO.TYPE.TCP_DATA:
@@ -128,6 +141,15 @@ export class TcpAgentServer {
       return;
     }
 
+    // Defer TCP_CONNECT_ACK until the tunnel client confirms TCP_OPEN
+    // (TCP_OPEN_ACK). This closes the race where the agent starts sending
+    // TCP_DATA for a stream the client ended up rejecting.
+    result.state.onClientOpenConfirmed = () => {
+      if (!result.state.cleaned) {
+        sendJsonFrame(ws, PROTO.TYPE.TCP_CONNECT_ACK, result.streamId, { port });
+      }
+    };
+
     this._connCountByPort.set(port, currentCount + 1);
     result.state.onCleanup = () => {
       const c = this._connCountByPort.get(port) || 1;
@@ -136,8 +158,6 @@ export class TcpAgentServer {
       if (owned) owned.delete(result.streamId);
     };
     this._agentStreams.get(ws).add(result.streamId);
-
-    sendJsonFrame(ws, PROTO.TYPE.TCP_CONNECT_ACK, result.streamId, { port });
   }
 
   _handleAgentPause(state) {

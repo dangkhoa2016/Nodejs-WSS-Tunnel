@@ -220,12 +220,15 @@ export class TcpRouter {
     const state = this.streamManager.createTcpStream({ ws, socket, serverPort: port, streamId });
     if (!state) return { error: 'Stream init failed' };
     state.agentWs = agentWs;
+    state.awaitingClientAck = true;
 
     const sent = sendJsonFrame(ws, PROTO.TYPE.TCP_OPEN, streamId, { host: TCP_TUNNEL_HOST, port });
     if (!sent) {
       this.streamManager.abortTcpStream(state, 'Failed to send TCP_OPEN', false);
       return { error: 'Failed to send TCP_OPEN' };
     }
+
+    logVerbose('tcp', 'tcp_open_sent', { streamId, port, host: TCP_TUNNEL_HOST });
 
     this._wireStream(socket, state, port);
 

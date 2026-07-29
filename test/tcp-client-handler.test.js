@@ -310,6 +310,46 @@ describe('TcpClientHandler', () => {
       assert.ok(sent.length > 0);
       assert.equal(sent[0].type, PROTO.TYPE.TCP_ABORT);
     });
+
+    it('sends TCP_ABORT when TCP_OPEN payload is invalid', async () => {
+      const { handler, sent } = await createHandler();
+
+      const ws = mockWs();
+      const payload = Buffer.from('not json');
+
+      handler.handleServerFrame(PROTO.TYPE.TCP_OPEN, ws, 7, payload, null);
+
+      assert.ok(sent.length > 0);
+      assert.equal(sent[0].type, PROTO.TYPE.TCP_ABORT);
+      assert.equal(sent[0].streamId, 7);
+    });
+
+    it('sends TCP_OPEN_ACK after the local connection succeeds', async () => {
+      const net = await import('node:net');
+      const echo = net.createServer((s) => s.pipe(s));
+      await new Promise((r) => echo.listen(0, '127.0.0.1', r));
+      const port = echo.address().port;
+
+      const { handler, sent } = await createHandler();
+      try {
+        const ws = mockWs();
+        const payload = Buffer.from(JSON.stringify({ host: '127.0.0.1', port }));
+
+        handler.handleServerFrame(PROTO.TYPE.TCP_OPEN, ws, 5, payload, null);
+
+        for (let i = 0; i < 50; i++) {
+          const ack = sent.find((s) => s.type === PROTO.TYPE.TCP_OPEN_ACK && s.streamId === 5);
+          if (ack) break;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+
+        const ack = sent.find((s) => s.type === PROTO.TYPE.TCP_OPEN_ACK && s.streamId === 5);
+        assert.ok(ack, 'client should send TCP_OPEN_ACK once the local TCP connection is established');
+      } finally {
+        handler.cleanupTcpStreams();
+        await new Promise((r) => echo.close(r));
+      }
+    });
   });
 
   describe('cleanupTcpStreams', () => {

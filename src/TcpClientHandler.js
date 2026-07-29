@@ -84,6 +84,7 @@ export function createTcpClientHandler(deps) {
       meta = parseJsonPayload(payload);
     } catch {
       logVerbose('tcp', 'open_invalid_payload', { streamId });
+      sendTcpAbort(currentWs, streamId, 'Invalid TCP_OPEN payload');
       return;
     }
 
@@ -135,6 +136,15 @@ export function createTcpClientHandler(deps) {
       resetIdleTimer(state);
 
       logVerbose('tcp', 'local_connected', { streamId, host, port });
+
+      // Confirm the stream to the server so it can ACK the agent
+      // (TCP_CONNECT_ACK). Without this, the server would ACK before the
+      // local connection exists and silently drop agent data on failure.
+      try {
+        sendJsonFrame(currentWs, PROTO.TYPE.TCP_OPEN_ACK, streamId, {});
+      } catch {
+        // ignore; the local socket error/timeout handlers will abort the stream
+      }
 
       // When local socket buffer drains, resume server traffic.
       localSocket.on('drain', () => {

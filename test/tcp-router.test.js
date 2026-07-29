@@ -230,6 +230,35 @@ describe('TcpRouter (unit)', () => {
     assert.equal(resumeCalls, 1, 'both clear');
   });
 
+  it('createAgentStream creates a virtual socket backed stream', async () => {
+    const sm = mockStreamManager();
+    const clientWs = mockWs();
+    const cm = mockClientManager(clientWs);
+    const agentWs = mockWs();
+
+    const { TcpRouter } = await import('../src/TcpRouter.js');
+    const router = new TcpRouter(sm, cm);
+
+    const result = router.createAgentStream({ agentWs, port: 6379 });
+
+    assert.ok(result.state, 'createAgentStream returned a state');
+    assert.equal(result.state.socket.isVirtual, true);
+    assert.equal(result.state.agentWs, agentWs);
+    assert.equal(result.streamId, 1);
+
+    const openFrame = clientWs
+      ._sent()
+      .map((data) => {
+        try {
+          return FrameCodec.parseFrame(data);
+        } catch {
+          return null;
+        }
+      })
+      .find((frame) => frame?.type === PROTO.TYPE.TCP_OPEN);
+    assert.ok(openFrame, 'TCP_OPEN frame sent to tunnel client');
+  });
+
   it('_handleConnection rejects when per_port_limit reached', async () => {
     const sm = mockStreamManager();
     const ws = mockWs();

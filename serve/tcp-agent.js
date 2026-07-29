@@ -24,6 +24,7 @@ if (process.env.NODE_ENV === 'development') {
  * - On TCP_CONNECT_ACK, bridges bytes in both directions via TCP_DATA frames.
  * - Honours TCP_CLOSE/TCP_ABORT and PAUSE/RESUME for correct teardown and
  *   backpressure.
+ * - Reconnects to the server with exponential backoff.
  *
  * NOTE: This file imports shared protocol/modules from src/. When bundled
  * with esbuild, the agent can be deployed independently without shipping the
@@ -70,6 +71,10 @@ if (!SERVER_URL || !USERNAME || !PASSWORD || AGENT_PORTS.length === 0) {
 // ---------------------------------------------------------------------------
 
 let ws = null;
+let reconnectTimer = null;
+let reconnectDelay = Number(process.env.AGENT_RECONNECT_DELAY_MS || 1000);
+let reconnectAttempt = 0;
+let authFailed = false;
 let shuttingDown = false;
 
 // streamId -> { socket, streamId, pendingSends, pausedForWs, peerPausedRead, localWriteBackpressured, cleaned }
@@ -422,6 +427,9 @@ function connect() {
 
   ws.on('open', () => {
     logStandard('agent', 'connected');
+    reconnectAttempt = 0;
+    reconnectDelay = Number(process.env.AGENT_RECONNECT_DELAY_MS || 1000);
+    authFailed = false;
   });
 
   ws.on('message', (data) => {
@@ -431,9 +439,15 @@ function connect() {
   ws.on('close', (code, reason) => {
     logStandard('agent', 'disconnected', { code, reason: reason?.toString() || '' });
     cleanupAll();
+    scheduleReconnect();
   });
 
   ws.on('error', (err) => {
+    if (err.message === 'Unexpected server response: 401') {
+      logStandard('agent', 'auth_failed');
+      authFailed = true;
+      return;
+    }
     logStandard('agent', 'error', { message: err.message });
   });
 
@@ -447,6 +461,21 @@ function connect() {
   });
 }
 
+function scheduleReconnect() {
+  if (authFailed || shuttingDown) return;
+
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+
+  reconnectTimer = setTimeout(() => {
+    reconnectAttempt += 1;
+    logStandard('agent', 'reconnect', { attempt: reconnectAttempt, delay_ms: reconnectDelay });
+    connect();
+  }, reconnectDelay);
+
+  // Exponential backoff, max 30s
+  reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+}
+
 // ---------------------------------------------------------------------------
 // Shutdown
 // ---------------------------------------------------------------------------
@@ -456,6 +485,8 @@ function shutdown() {
   shuttingDown = true;
 
   logStandard('agent', 'shutdown');
+
+  if (reconnectTimer) clearTimeout(reconnectTimer);
 
   cleanupAll();
 

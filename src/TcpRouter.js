@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { syncSocketReadState } from './TcpFlowControl.js';
+import { createVirtualSocket } from './VirtualSocket.js';
 import {
   MAX_CONCURRENT_STREAMS,
   TCP_MAX_CONNECTIONS_PER_PORT,
@@ -57,7 +58,7 @@ export class TcpRouter {
   _handleConnection(socket, serverPort) {
     const remoteAddr = socket.remoteAddress;
 
-    if (!isIpAllowed(remoteAddr, TCP_TUNNEL_ALLOWED_IPS)) {
+    if (!socket.isVirtual && !isIpAllowed(remoteAddr, TCP_TUNNEL_ALLOWED_IPS)) {
       logStandard('tcp', 'reject', { reason: 'ip_not_allowed', serverPort, remoteAddr });
       socket.destroy();
       return;
@@ -125,6 +126,13 @@ export class TcpRouter {
       return;
     }
 
+    this._wireStream(socket, state, serverPort);
+  }
+
+  _wireStream(socket, state, serverPort) {
+    const ws = state.ws;
+    const streamId = state.id;
+
     // Direction 1: external client -> WS. Self-throttle on WS outbound buffer.
     state.pendingSends = 0;
     state.localPausedForWs = false;
@@ -185,6 +193,47 @@ export class TcpRouter {
       }
       this.streamManager.abortTcpStream(state, err.message, false);
     });
+  }
+
+  createAgentStream({ agentWs, port }) {
+    const ws = this.clientManager.getActiveClient();
+    if (!ws) return { error: 'No tunnel client connected' };
+
+    if (this.streamManager.size >= MAX_CONCURRENT_STREAMS) {
+      return { error: 'Too many concurrent streams' };
+    }
+
+    let streamId;
+    try {
+      streamId = this.streamManager.allocateStreamId();
+    } catch {
+      return { error: 'No available stream id' };
+    }
+
+    const socket = createVirtualSocket({
+      remoteAddress: agentWs._socket?.remoteAddress,
+      remotePort: port,
+      agentWs,
+      streamId,
+    });
+
+    const state = this.streamManager.createTcpStream({ ws, socket, serverPort: port, streamId });
+    if (!state) return { error: 'Stream init failed' };
+    state.agentWs = agentWs;
+    state.awaitingClientAck = true;
+
+    const sent = sendJsonFrame(ws, PROTO.TYPE.TCP_OPEN, streamId, { host: TCP_TUNNEL_HOST, port });
+    if (!sent) {
+      this.streamManager.abortTcpStream(state, 'Failed to send TCP_OPEN', false);
+      return { error: 'Failed to send TCP_OPEN' };
+    }
+
+    logVerbose('tcp', 'tcp_open_sent', { streamId, port, host: TCP_TUNNEL_HOST });
+
+    this._wireStream(socket, state, port);
+
+    logVerbose('tcp', 'agent_stream', { streamId, port });
+    return { state, streamId };
   }
 
   _sendFrame(ws, frame) {

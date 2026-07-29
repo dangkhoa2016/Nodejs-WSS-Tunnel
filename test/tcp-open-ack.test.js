@@ -133,7 +133,37 @@ async function setupAgentEnv() {
   };
 }
 
+describe('TCP_OPEN_ACK protocol', () => {
+  it('defines the TCP_OPEN_ACK frame type', () => {
+    assert.equal(PROTO.TYPE.TCP_OPEN_ACK, 0x44);
+  });
+});
+
 describe('deferred TCP_CONNECT_ACK (race condition fix)', () => {
+  it('defers TCP_CONNECT_ACK until the tunnel client confirms TCP_OPEN', async () => {
+    const env = await setupAgentEnv();
+    try {
+      buildSendJsonFrame(env.agentWs)(PROTO.TYPE.TCP_CONNECT, 0, { port: 6379 });
+
+      const tunnelOpen = await env.tunnelCollector.waitFor(PROTO.TYPE.TCP_OPEN);
+      const streamId = tunnelOpen.streamId;
+      assert.deepEqual(JSON.parse(tunnelOpen.payload.toString()), { host: '127.0.0.1', port: 6379 });
+
+      // Server must NOT ACK the agent until the client confirms.
+      await assert.rejects(
+        () => env.agentCollector.waitFor(PROTO.TYPE.TCP_CONNECT_ACK, null, 150),
+        /timeout waiting for frame/,
+      );
+
+      // Client confirms -> ACK arrives with the correct stream id and port.
+      env.tunnelWs.send(FrameCodec.buildFrame(PROTO.TYPE.TCP_OPEN_ACK, streamId), { binary: true });
+      const ack = await env.agentCollector.waitFor(PROTO.TYPE.TCP_CONNECT_ACK, streamId);
+      assert.deepEqual(JSON.parse(ack.payload.toString()), { port: 6379 });
+    } finally {
+      await env.cleanup();
+    }
+  });
+
   it('sends TCP_ABORT to the agent instead of ACK when the client rejects TCP_OPEN', async () => {
     const env = await setupAgentEnv();
     try {
@@ -164,6 +194,17 @@ describe('deferred TCP_CONNECT_ACK (race condition fix)', () => {
 
       await sleep(50);
       assert.equal(env.sm.streams.size, 0, 'stream should be cleaned up after client reject');
+    } finally {
+      await env.cleanup();
+    }
+  });
+
+  it('replies TCP_ABORT for agent data on an unknown stream instead of silently dropping', async () => {
+    const env = await setupAgentEnv();
+    try {
+      env.agentWs.send(FrameCodec.buildFrame(PROTO.TYPE.TCP_DATA, 999, Buffer.from('x')), { binary: true });
+      const abort = await env.agentCollector.waitFor(PROTO.TYPE.TCP_ABORT, 999);
+      assert.deepEqual(JSON.parse(abort.payload.toString()), { message: 'Stream not found' });
     } finally {
       await env.cleanup();
     }

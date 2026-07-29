@@ -8,6 +8,7 @@ import {
   MAX_CONCURRENT_STREAMS,
   SERVER_HOST,
   TCP_AGENT_ALLOWED_ORIGINS,
+  TCP_AGENT_ALLOWED_PORTS,
   TCP_AGENT_PASSWORD,
   TCP_AGENT_PATH,
   TCP_AGENT_REQUIRE_TLS,
@@ -155,7 +156,7 @@ export class HttpRouter {
     }
 
     if (pathname === `/${INSTALL_UUID}-install`) {
-      this._serveFile(res, path.join(PROJECT_ROOT, 'serve', 'setup.sh'), 'application/x-sh');
+      this._serveInstallScript(res);
       return;
     }
 
@@ -164,13 +165,37 @@ export class HttpRouter {
       return;
     }
 
-    if (pathname === '/client.js') {
+    if (pathname === `/${INSTALL_UUID}-client.js`) {
       this._serveFile(res, path.join(PROJECT_ROOT, 'dist', 'client.js'), 'application/javascript; charset=utf-8');
       return;
     }
 
-    if (pathname === '/client-package.json') {
+    if (pathname === `/${INSTALL_UUID}-client-package.json`) {
       this._serveFile(res, path.join(PROJECT_ROOT, 'serve', 'client-package.json'), 'application/json; charset=utf-8');
+      return;
+    }
+
+    if (pathname === `/${INSTALL_UUID}-tcp-agent.js`) {
+      if (TCP_AGENT_ALLOWED_PORTS.length > 0) {
+        this._serveFile(res, path.join(PROJECT_ROOT, 'dist', 'tcp-agent.js'), 'application/javascript; charset=utf-8');
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Not found');
+      }
+      return;
+    }
+
+    if (pathname === `/${INSTALL_UUID}-tcp-agent-package.json`) {
+      if (TCP_AGENT_ALLOWED_PORTS.length > 0) {
+        this._serveFile(
+          res,
+          path.join(PROJECT_ROOT, 'serve', 'tcp-agent-package.json'),
+          'application/json; charset=utf-8',
+        );
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Not found');
+      }
       return;
     }
 
@@ -194,6 +219,21 @@ export class HttpRouter {
       const content = fs.readFileSync(filePath);
       res.writeHead(200, {
         'Content-Type': contentType,
+        'Cache-Control': 'no-store',
+      });
+      res.end(content);
+    } catch {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Internal server error');
+    }
+  }
+
+  _serveInstallScript(res) {
+    try {
+      let content = fs.readFileSync(path.join(PROJECT_ROOT, 'serve', 'setup.sh'), 'utf8');
+      content = content.replaceAll('{{INSTALL_UUID}}', INSTALL_UUID);
+      res.writeHead(200, {
+        'Content-Type': 'application/x-sh',
         'Cache-Control': 'no-store',
       });
       res.end(content);

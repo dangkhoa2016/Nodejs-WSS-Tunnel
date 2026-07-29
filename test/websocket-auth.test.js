@@ -16,7 +16,7 @@ function findFreePort() {
   });
 }
 
-function wsConnectUpgrade(url, authHeader) {
+function wsConnectUpgrade(url, authHeader, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
     const key = Buffer.from(Math.random().toString(36)).toString('base64');
@@ -27,6 +27,7 @@ function wsConnectUpgrade(url, authHeader) {
       'Sec-WebSocket-Version': '13',
     };
     if (authHeader) headers.Authorization = authHeader;
+    Object.assign(headers, extraHeaders);
 
     const req = http.request({ hostname: parsed.hostname, port: parsed.port, path: parsed.pathname, headers });
 
@@ -48,9 +49,9 @@ function wsConnectUpgrade(url, authHeader) {
   });
 }
 
-function wsOpen(url, authHeader) {
+function wsOpen(url, authHeader, extraHeaders = {}) {
   return new Promise((resolve, reject) => {
-    const headers = {};
+    const headers = { ...extraHeaders };
     if (authHeader) headers.Authorization = authHeader;
     const ws = new WebSocket(url, { headers, handshakeTimeout: 3000 });
     ws.on('open', () => {
@@ -248,5 +249,192 @@ describe('WebSocket Basic Auth', () => {
     const badUrl = `http://localhost:${serverPort}/other-path`;
     const res = await wsConnectUpgrade(badUrl);
     assert.equal(res.status, 501);
+  });
+});
+
+async function startServer(extraEnv = {}) {
+  const port = await findFreePort();
+  const proc = spawn('node', ['src/index.js'], {
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      PORT: String(port),
+      TUNNEL_USERNAME: 'admin',
+      TUNNEL_PASSWORD: 'secret',
+      ...extraEnv,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Server start timeout')), 15000);
+    const onData = (data) => {
+      if (data.toString().includes('[ws] startup')) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    };
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', onData);
+    proc.on('exit', (code) => {
+      clearTimeout(timeout);
+      reject(new Error(`Server exited with code ${code}`));
+    });
+  });
+
+  return {
+    port,
+    proc,
+    kill: () =>
+      new Promise((resolve) => {
+        const t = setTimeout(resolve, 3000);
+        proc.on('exit', () => {
+          clearTimeout(t);
+          resolve();
+        });
+        proc.kill();
+      }),
+  };
+}
+
+describe('TCP agent upgrade policy', () => {
+  const AGENT_USER = 'agent-user';
+  const AGENT_PASS = 'agent-secret';
+  const agentUrl = (port) => `http://localhost:${port}/tcp`;
+
+  it('rejects the agent path when no agent ports are configured', async () => {
+    const server = await startServer();
+    try {
+      const res = await wsConnectUpgrade(agentUrl(server.port), basicAuth(AGENT_USER, AGENT_PASS));
+      assert.equal(res.status, 501);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('accepts valid agent credentials with WebSocket upgrade', async () => {
+    const server = await startServer({
+      TCP_AGENT_USERNAME: AGENT_USER,
+      TCP_AGENT_PASSWORD: AGENT_PASS,
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+    });
+    try {
+      const res = await wsOpen(agentUrl(server.port).replace('http://', 'ws://'), basicAuth(AGENT_USER, AGENT_PASS));
+      assert.equal(res, true);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('rejects wrong agent password with 401', async () => {
+    const server = await startServer({
+      TCP_AGENT_USERNAME: AGENT_USER,
+      TCP_AGENT_PASSWORD: AGENT_PASS,
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+    });
+    try {
+      const res = await wsConnectUpgrade(agentUrl(server.port), basicAuth(AGENT_USER, 'wrong'));
+      assert.equal(res.status, 401);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('rejects a disallowed Origin with 403', async () => {
+    const server = await startServer({
+      TCP_AGENT_USERNAME: AGENT_USER,
+      TCP_AGENT_PASSWORD: AGENT_PASS,
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+      TCP_AGENT_ALLOWED_ORIGINS: 'https://allowed.example',
+    });
+    try {
+      const res = await wsConnectUpgrade(agentUrl(server.port), basicAuth(AGENT_USER, AGENT_PASS), {
+        Origin: 'https://evil.example',
+      });
+      assert.equal(res.status, 403);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('accepts an allowed Origin with WebSocket upgrade', async () => {
+    const server = await startServer({
+      TCP_AGENT_USERNAME: AGENT_USER,
+      TCP_AGENT_PASSWORD: AGENT_PASS,
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+      TCP_AGENT_ALLOWED_ORIGINS: 'https://allowed.example',
+    });
+    try {
+      const res = await wsOpen(agentUrl(server.port).replace('http://', 'ws://'), basicAuth(AGENT_USER, AGENT_PASS), {
+        Origin: 'https://allowed.example',
+      });
+      assert.equal(res, true);
+    } finally {
+      await server.kill();
+    }
+  });
+});
+
+describe('TCP agent TLS policy', () => {
+  const agentUrl = (port) => `http://localhost:${port}/tcp`;
+
+  it('rejects an unencrypted upgrade when TLS is required', async () => {
+    const server = await startServer({
+      TCP_AGENT_REQUIRE_TLS: 'true',
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+    });
+    try {
+      const res = await wsConnectUpgrade(agentUrl(server.port), basicAuth('admin', 'secret'));
+      assert.equal(res.status, 426);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('rejects a forged forwarded https header from an untrusted peer', async () => {
+    const server = await startServer({
+      TCP_AGENT_REQUIRE_TLS: 'true',
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+    });
+    try {
+      const res = await wsConnectUpgrade(agentUrl(server.port), basicAuth('admin', 'secret'), {
+        'x-forwarded-proto': 'https',
+      });
+      assert.equal(res.status, 426);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('rejects forwarded http from a trusted proxy', async () => {
+    const server = await startServer({
+      TCP_AGENT_REQUIRE_TLS: 'true',
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+      TCP_AGENT_TRUSTED_PROXIES: '127.0.0.1',
+    });
+    try {
+      const res = await wsConnectUpgrade(agentUrl(server.port), basicAuth('admin', 'secret'), {
+        'x-forwarded-proto': 'http',
+      });
+      assert.equal(res.status, 426);
+    } finally {
+      await server.kill();
+    }
+  });
+
+  it('accepts forwarded https from a trusted proxy', async () => {
+    const server = await startServer({
+      TCP_AGENT_REQUIRE_TLS: 'true',
+      TCP_AGENT_ALLOWED_PORTS: '6379',
+      TCP_AGENT_TRUSTED_PROXIES: '127.0.0.1',
+    });
+    try {
+      const res = await wsOpen(agentUrl(server.port).replace('http://', 'ws://'), basicAuth('admin', 'secret'), {
+        'x-forwarded-proto': 'https',
+      });
+      assert.equal(res, true);
+    } finally {
+      await server.kill();
+    }
   });
 });

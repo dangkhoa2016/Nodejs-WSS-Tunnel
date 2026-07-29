@@ -510,6 +510,16 @@ export class StreamManager {
           } catch {
             /* ignore */
           }
+          if (state.awaitingClientAck && state.agentWs && state.agentWs.readyState === WS_OPEN) {
+            // The agent has not been ACKed yet (deferred TCP_CONNECT_ACK), so
+            // it matches pending connects by port. Reject the connect the same
+            // way as a connect-level rejection instead of an unknown stream.
+            sendJsonFrame(state.agentWs, PROTO.TYPE.TCP_ABORT, 0, {
+              port: state.serverPort,
+              message: info.message || 'Client aborted',
+            });
+            state.awaitingClientAck = false;
+          }
           this.abortTcpStream(state, info.message || 'Client aborted', false);
           break;
         }

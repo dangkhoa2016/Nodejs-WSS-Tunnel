@@ -262,6 +262,31 @@ describe('TCP agent process', () => {
     }
   });
 
+  it('reconnects when the WebSocket connection drops', { timeout: 25000 }, async () => {
+    const agentPort = await findFreePort();
+    const mock = createMockWsServer();
+    const mockPort = mock.wss.address().port;
+    const proc = spawnAgent({ mockPort, agentPort });
+    try {
+      await waitForAgentListening(proc, agentPort);
+      await waitFor(() => mock.connections.size > 0);
+
+      await mock.close();
+
+      const second = new WebSocketServer({ port: mockPort });
+      try {
+        await waitFor(() => second.clients.size > 0, 10000);
+      } finally {
+        for (const ws of [...second.clients]) ws.terminate();
+        await new Promise((r) => second.close(r));
+      }
+    } finally {
+      proc.kill();
+      await killAndWait(proc);
+      await mock.close();
+    }
+  });
+
   it('exits cleanly on SIGTERM', { timeout: 10000 }, async () => {
     const agentPort = await findFreePort();
     const mock = createMockWsServer();

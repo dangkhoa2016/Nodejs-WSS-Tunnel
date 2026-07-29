@@ -17,7 +17,7 @@ SERVER_URL="${TUNNEL_SERVER_URL:-}"
 USERNAME="${TUNNEL_USERNAME:-}"
 PASSWORD="${TUNNEL_PASSWORD:-}"
 TARGET="${TARGET_ORIGIN:-http://127.0.0.1:8000}"
-INSTALL_UUID="${INSTALL_UUID:-{{INSTALL_UUID}}}"
+INSTALL_UUID="${INSTALL_UUID:-__INSTALL_UUID__}"
 READY_FILE="${WORK_DIR}/client.ready"
 TUNNEL_PROMPT_INPUT="${TUNNEL_PROMPT_INPUT:-/dev/tty}"
 LINK_NAME="current"
@@ -88,10 +88,19 @@ info "Node.js $(node -v)"
 BASE_URL="$(echo "$SERVER_URL" | sed 's|^wss://|https://|; s|^ws://|http://|; s|/tunnel$||; s|/$||')"
 
 # --- Atomic file write ---
+CURL_OPTS=(--fail --show-error --location -sS)
+if [ "${TUNNEL_SKIP_TLS_VERIFY:-0}" = "1" ]; then
+  CURL_OPTS+=(--insecure)
+  warn "TUNNEL_SKIP_TLS_VERIFY=1 — skipping TLS certificate verification (insecure)"
+fi
+
 download_atomic() {
   local url="$1" dest="$2"
   local tmp; tmp="$(mktemp "$dest.part.XXXXXX")"
-  curl --fail --show-error --location -sS -o "$tmp" "$url"
+  if ! curl "${CURL_OPTS[@]}" -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "Download failed: $url (SSL certificate problem? try TUNNEL_SKIP_TLS_VERIFY=1)"
+  fi
   mv "$tmp" "$dest"
 }
 

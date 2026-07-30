@@ -74,7 +74,7 @@ jobs:
       - run: corepack enable
       - run: yarn install --immutable
       - run: yarn build:client
-      - run: NODE_ENV=test node --test --test-timeout=120000 test/*.test.js
+      - run: NODE_ENV=test node --test --test-timeout=120000 $(find test -name '*.test.js')
 
   audit:
     runs-on: ubuntu-latest

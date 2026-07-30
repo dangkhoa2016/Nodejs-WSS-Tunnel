@@ -7,7 +7,7 @@
   "scripts": {
     "prod": "NODE_ENV=production node src/index.js",
     "dev": "NODE_ENV=development node src/index.js",
-    "test": "NODE_ENV=test node --test test/*.test.js",
+    "test": "NODE_ENV=test node --test $(find test -name '*.test.js')",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",

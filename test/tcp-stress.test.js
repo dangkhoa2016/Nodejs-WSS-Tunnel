@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 import { canConnect, createEchoServer } from './helpers/tcp-test-setup.js';
 
 function sleep(ms) {

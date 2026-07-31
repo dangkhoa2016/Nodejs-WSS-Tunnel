@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { syncSocketReadState } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 
 function mockWs(readyState = 1) {
   const sent = [];

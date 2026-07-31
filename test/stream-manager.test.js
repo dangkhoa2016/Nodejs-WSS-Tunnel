@@ -3,7 +3,7 @@ import { beforeEach, describe, it } from 'node:test';
 import WebSocket from 'ws';
 
 const { StreamManager } = await import('../src/StreamManager.js');
-const { PROTO, FrameCodec } = await import('../src/protocol.js');
+const { PROTO, FrameCodec } = await import('../src/shared/protocol.js');
 
 function mockWs(readyState = WebSocket.OPEN) {
   const sent = [];

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { syncSocketReadState, syncTcpBackpressure } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 
 function fakeSocket() {
   return {

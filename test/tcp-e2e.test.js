@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 
 describe('TCP tunnel e2e', () => {
   it('tunnels TCP data end-to-end through WebSocket', { timeout: 10000 }, async () => {

@@ -1,6 +1,6 @@
 import WebSocket from 'ws';
-import { MAX_TUNNEL_CLIENTS } from './config.js';
-import { logVerbose } from './logger.js';
+import { MAX_TUNNEL_CLIENTS } from './shared/config.js';
+import { logVerbose } from './shared/logger.js';
 
 export class ClientManager {
   constructor(streamManager) {

@@ -1,8 +1,8 @@
 import net from 'node:net';
 import WebSocket from 'ws';
 
-import { logError, logStandard, logVerbose } from '../src/logging.js';
-import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/protocol.js';
+import { logError, logStandard, logVerbose } from '../src/shared/logging.js';
+import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/shared/protocol.js';
 
 if (process.env.NODE_ENV === 'development') {
   try {

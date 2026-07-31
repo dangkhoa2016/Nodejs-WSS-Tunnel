@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 
-const { logStandard, logVerbose, logError, getConfig, setConfig } = await import('../src/logging.js');
+const { logStandard, logVerbose, logError, getConfig, setConfig } = await import('../../src/shared/logging.js');
 
 const CATS = ['ws', 'http', 'proxy', 'stream', 'heartbeat', 'auth', 'tcp', 'client', 'agent', 'shutdown'];
 

@@ -11,10 +11,10 @@ import {
   TCP_TUNNEL_PORTS,
   WS_HIGH_WATER,
   WS_LOW_WATER,
-} from './config.js';
-import { isIpAllowed } from './ipAllowlist.js';
-import { logStandard, logVerbose } from './logger.js';
-import { FrameCodec, PROTO, sendJsonFrame } from './protocol.js';
+} from './shared/config.js';
+import { isIpAllowed } from './shared/ipAllowlist.js';
+import { logStandard, logVerbose } from './shared/logger.js';
+import { FrameCodec, PROTO, sendJsonFrame } from './shared/protocol.js';
 
 const WS_OPEN = 1;
 

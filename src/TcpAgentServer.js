@@ -1,6 +1,6 @@
 import { syncTcpBackpressure } from './TcpFlowControl.js';
-import { logVerbose } from './logger.js';
-import { FrameCodec, PROTO, sendJsonFrame } from './protocol.js';
+import { logVerbose } from './shared/logger.js';
+import { FrameCodec, PROTO, sendJsonFrame } from './shared/protocol.js';
 
 export class TcpAgentServer {
   constructor(streamManager, tcpRouter, options = {}) {

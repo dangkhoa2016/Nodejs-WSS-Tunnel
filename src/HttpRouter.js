@@ -15,11 +15,11 @@ import {
   TCP_AGENT_TRUSTED_PROXIES,
   TCP_AGENT_USERNAME,
   TUNNEL_PATH,
-} from './config.js';
-import { isIpAllowed } from './ipAllowlist.js';
-import { getConfig, logStandard, logVerbose, setConfig } from './logger.js';
-import { FrameCodec, PROTO } from './protocol.js';
-import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils.js';
+} from './shared/config.js';
+import { isIpAllowed } from './shared/ipAllowlist.js';
+import { getConfig, logStandard, logVerbose, setConfig } from './shared/logger.js';
+import { FrameCodec, PROTO } from './shared/protocol.js';
+import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './shared/utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

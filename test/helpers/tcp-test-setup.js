@@ -1,6 +1,6 @@
 import net from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../../src/protocol.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));

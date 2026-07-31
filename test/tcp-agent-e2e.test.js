@@ -5,7 +5,7 @@ import http from 'node:http';
 import net from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import WebSocket from 'ws';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 import { canConnect } from './helpers/tcp-test-setup.js';
 
 function findFreePort() {

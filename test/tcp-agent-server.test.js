@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
 import { syncTcpBackpressure } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 import { createEchoServer } from './helpers/tcp-test-setup.js';
 
 const TCP_HANDLER_DEFAULTS = {

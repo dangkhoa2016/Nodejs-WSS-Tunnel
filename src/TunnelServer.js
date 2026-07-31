@@ -16,8 +16,8 @@ import {
   TUNNEL_PATH,
   WS_MAX_PAYLOAD,
   validateConfig,
-} from './config.js';
-import { logError, logStandard, logVerbose } from './logger.js';
+} from './shared/config.js';
+import { logError, logStandard, logVerbose } from './shared/logger.js';
 
 const GRACEFUL_TIMEOUT_MS = 10_000;
 

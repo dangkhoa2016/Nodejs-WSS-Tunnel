@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { describe, it } from 'node:test';
 
-const { generateSignedUrl, validateHmacSignature } = await import('../src/utils.js');
+const { generateSignedUrl, validateHmacSignature } = await import('../../src/shared/utils.js');
 
 describe('generateSignedUrl', () => {
   it('returns expires and sig strings', () => {

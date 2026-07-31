@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
 import { createVirtualSocket } from '../src/VirtualSocket.js';
-import { MAX_DEST_BUFFER_BYTES, WS_HIGH_WATER, WS_LOW_WATER } from '../src/config.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { MAX_DEST_BUFFER_BYTES, WS_HIGH_WATER, WS_LOW_WATER } from '../src/shared/config.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 
 function nextTick() {
   return new Promise((resolve) => process.nextTick(resolve));

@@ -1,6 +1,6 @@
 import assert from 'node:assert';
 import { describe, it } from 'node:test';
-import { isIpAllowed } from '../src/ipAllowlist.js';
+import { isIpAllowed } from '../../src/shared/ipAllowlist.js';
 
 describe('isIpAllowed', () => {
   it('allows all when allowlist is empty', () => {

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
-import { MAX_DEST_BUFFER_BYTES, WS_HIGH_WATER, WS_LOW_WATER } from './config.js';
-import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from './protocol.js';
+import { MAX_DEST_BUFFER_BYTES, WS_HIGH_WATER, WS_LOW_WATER } from './shared/config.js';
+import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from './shared/protocol.js';
 
 const WS_OPEN = 1;
 

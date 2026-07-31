@@ -1,4 +1,4 @@
-import { FrameCodec, PROTO, sendFrame } from './protocol.js';
+import { FrameCodec, PROTO, sendFrame } from './shared/protocol.js';
 
 export function syncSocketReadState(state, socket) {
   if (!socket || socket.destroyed) return false;

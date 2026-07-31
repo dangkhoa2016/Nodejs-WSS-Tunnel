@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 import { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/protocol.js';
+import { FrameCodec, PROTO } from '../src/shared/protocol.js';
 import { sleep } from './helpers/tcp-test-setup.js';
 
 function findFreePort() {

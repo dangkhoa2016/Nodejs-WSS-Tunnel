@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mock, test } from 'node:test';
-import { TunnelServer } from '../src/TunnelServer.js';
+import { TunnelServer } from '../../src/server/TunnelServer.js';
 
 test('close returns one shared promise', async () => {
   const server = new TunnelServer();

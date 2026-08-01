@@ -1,4 +1,4 @@
-import { TunnelServer } from './TunnelServer.js';
+import { TunnelServer } from './server/TunnelServer.js';
 
 const server = new TunnelServer();
 server.start();

@@ -23,7 +23,7 @@ describe('TCP tunnel e2e', () => {
         localServer.on('error', j);
       });
 
-      const { StreamManager } = await import('../../src/StreamManager.js');
+      const { StreamManager } = await import('../../src/server/StreamManager.js');
       const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
       const sm = new StreamManager();

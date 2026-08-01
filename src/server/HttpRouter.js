@@ -14,14 +14,14 @@ import {
   TCP_AGENT_REQUIRE_TLS,
   TCP_AGENT_USERNAME,
   TUNNEL_PATH,
-} from './shared/config.js';
-import { getConfig, logStandard, logVerbose, setConfig } from './shared/logger.js';
-import { FrameCodec, PROTO } from './shared/protocol.js';
-import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './shared/utils.js';
+} from '../shared/config.js';
+import { getConfig, logStandard, logVerbose, setConfig } from '../shared/logger.js';
+import { FrameCodec, PROTO } from '../shared/protocol.js';
+import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from '../shared/utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.resolve(__dirname, '..');
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 export class HttpRouter {
   constructor(streamManager, clientManager) {

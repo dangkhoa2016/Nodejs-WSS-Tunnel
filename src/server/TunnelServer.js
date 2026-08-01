@@ -1,8 +1,5 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
-import { ClientManager } from './ClientManager.js';
-import { HttpRouter } from './HttpRouter.js';
-import { StreamManager } from './StreamManager.js';
 import {
   INSTALL_UUID,
   PORT,
@@ -14,10 +11,13 @@ import {
   TUNNEL_PATH,
   WS_MAX_PAYLOAD,
   validateConfig,
-} from './shared/config.js';
-import { logError, logStandard, logVerbose } from './shared/logger.js';
-import { TcpAgentServer } from './tcp/TcpAgentServer.js';
-import { TcpRouter } from './tcp/TcpRouter.js';
+} from '../shared/config.js';
+import { logError, logStandard, logVerbose } from '../shared/logger.js';
+import { TcpAgentServer } from '../tcp/TcpAgentServer.js';
+import { TcpRouter } from '../tcp/TcpRouter.js';
+import { ClientManager } from './ClientManager.js';
+import { HttpRouter } from './HttpRouter.js';
+import { StreamManager } from './StreamManager.js';
 
 const GRACEFUL_TIMEOUT_MS = 10_000;
 

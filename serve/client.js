@@ -7,7 +7,7 @@ import { URL } from 'node:url';
 
 import WebSocket from 'ws';
 
-import { WsFrameWriter } from '../src/WsFrameWriter.js';
+import { WsFrameWriter } from '../src/server/WsFrameWriter.js';
 import { logStandard, logVerbose } from '../src/shared/logging.js';
 import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/shared/protocol.js';
 import { sanitizeHeaders } from '../src/shared/utils.js';

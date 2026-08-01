@@ -74,7 +74,7 @@ async function startTunnelServer(port, username, password) {
   process.env.TUNNEL_PASSWORD = password;
   process.env.INSTALL_UUID = 'e2e-install';
   try {
-    const { TunnelServer } = await import('../src/server/TunnelServer.js');
+    const { TunnelServer } = await import('../../src/server/TunnelServer.js');
     const server = new TunnelServer();
     server.start();
     await new Promise((resolve) => setTimeout(resolve, 500));

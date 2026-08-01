@@ -5,7 +5,7 @@ import WebSocket from 'ws';
 
 const { StreamManager } = await import('../src/StreamManager.js');
 const { PROTO, FrameCodec } = await import('../src/shared/protocol.js');
-const { syncSocketReadState } = await import('../src/TcpFlowControl.js');
+const { syncSocketReadState } = await import('../src/tcp/TcpFlowControl.js');
 
 function mockWs(readyState = WebSocket.OPEN) {
   const sent = [];

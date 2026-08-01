@@ -3,8 +3,6 @@ import { WebSocketServer } from 'ws';
 import { ClientManager } from './ClientManager.js';
 import { HttpRouter } from './HttpRouter.js';
 import { StreamManager } from './StreamManager.js';
-import { TcpAgentServer } from './TcpAgentServer.js';
-import { TcpRouter } from './TcpRouter.js';
 import {
   INSTALL_UUID,
   PORT,
@@ -18,6 +16,8 @@ import {
   validateConfig,
 } from './shared/config.js';
 import { logError, logStandard, logVerbose } from './shared/logger.js';
+import { TcpAgentServer } from './tcp/TcpAgentServer.js';
+import { TcpRouter } from './tcp/TcpRouter.js';
 
 const GRACEFUL_TIMEOUT_MS = 10_000;
 

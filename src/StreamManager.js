@@ -1,10 +1,10 @@
 import WebSocket from 'ws';
-import { syncSocketReadState, syncTcpBackpressure } from './TcpFlowControl.js';
 import { WsFrameWriter } from './WsFrameWriter.js';
 import { MAX_DEST_BUFFER_BYTES, STREAM_IDLE_TIMEOUT_MS } from './shared/config.js';
 import { logVerbose } from './shared/logger.js';
 import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from './shared/protocol.js';
 import { sanitizeHeaders } from './shared/utils.js';
+import { syncSocketReadState, syncTcpBackpressure } from './tcp/TcpFlowControl.js';
 
 const WS_OPEN = 1;
 

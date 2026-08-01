@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
 
 describe('TCP tunnel e2e', () => {
   it('tunnels TCP data end-to-end through WebSocket', { timeout: 10000 }, async () => {
@@ -23,8 +23,8 @@ describe('TCP tunnel e2e', () => {
         localServer.on('error', j);
       });
 
-      const { StreamManager } = await import('../src/StreamManager.js');
-      const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+      const { StreamManager } = await import('../../src/StreamManager.js');
+      const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
       const sm = new StreamManager();
       const streams = sm.streams;

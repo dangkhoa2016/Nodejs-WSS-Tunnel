@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { syncTcpBackpressure } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
-import { createEchoServer } from './helpers/tcp-test-setup.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
+import { syncTcpBackpressure } from '../../src/tcp/TcpFlowControl.js';
+import { createEchoServer } from '../helpers/tcp-test-setup.js';
 
 const TCP_HANDLER_DEFAULTS = {
   MAX_CONCURRENT_STREAMS: 200,
@@ -90,11 +90,11 @@ function makeCollector(ws) {
 }
 
 async function setupAgentEnv({ allowedPorts, maxConnectionsPerPort = 0, maxStreamsPerAgent = 0 } = {}) {
-  const { StreamManager } = await import('../src/StreamManager.js');
-  const { ClientManager } = await import('../src/ClientManager.js');
-  const { TcpRouter } = await import('../src/TcpRouter.js');
-  const { TcpAgentServer } = await import('../src/TcpAgentServer.js');
-  const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+  const { StreamManager } = await import('../../src/StreamManager.js');
+  const { ClientManager } = await import('../../src/ClientManager.js');
+  const { TcpRouter } = await import('../../src/tcp/TcpRouter.js');
+  const { TcpAgentServer } = await import('../../src/tcp/TcpAgentServer.js');
+  const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
   const sm = new StreamManager();
   const cm = new ClientManager(sm);

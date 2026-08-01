@@ -1,7 +1,7 @@
 import net from 'node:net';
+import { logVerbose } from '../shared/logger.js';
+import { PROTO } from '../shared/protocol.js';
 import { syncSocketReadState } from './TcpFlowControl.js';
-import { logVerbose } from './shared/logger.js';
-import { PROTO } from './shared/protocol.js';
 
 const WS_OPEN = 1;
 

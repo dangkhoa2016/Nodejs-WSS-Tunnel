@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 import WebSocket from 'ws';
 
-const { StreamManager } = await import('../src/StreamManager.js');
-const { PROTO, FrameCodec } = await import('../src/shared/protocol.js');
+const { StreamManager } = await import('../../src/server/StreamManager.js');
+const { PROTO, FrameCodec } = await import('../../src/shared/protocol.js');
 
 function mockWs(readyState = WebSocket.OPEN) {
   const sent = [];

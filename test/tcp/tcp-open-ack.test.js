@@ -73,8 +73,8 @@ function buildSendJsonFrame(ws) {
 }
 
 async function setupAgentEnv() {
-  const { StreamManager } = await import('../../src/StreamManager.js');
-  const { ClientManager } = await import('../../src/ClientManager.js');
+  const { StreamManager } = await import('../../src/server/StreamManager.js');
+  const { ClientManager } = await import('../../src/server/ClientManager.js');
   const { TcpRouter } = await import('../../src/tcp/TcpRouter.js');
   const { TcpAgentServer } = await import('../../src/tcp/TcpAgentServer.js');
 

@@ -25,7 +25,7 @@ describe('TCP Stress Tests', () => {
     const wsPort = 25390;
     const cleanup = [];
     try {
-      const { StreamManager } = await import('../../src/StreamManager.js');
+      const { StreamManager } = await import('../../src/server/StreamManager.js');
       const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
       const streamManager = new StreamManager();
@@ -133,7 +133,7 @@ describe('TCP Stress Tests', () => {
     const cleanup = [];
     try {
       echo = await createEchoServer();
-      const { StreamManager } = await import('../../src/StreamManager.js');
+      const { StreamManager } = await import('../../src/server/StreamManager.js');
       const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
       const streamManager = new StreamManager();

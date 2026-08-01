@@ -7,7 +7,7 @@ import { URL } from 'node:url';
 
 import WebSocket from 'ws';
 
-import { createTcpClientHandler } from '../src/TcpClientHandler.js';
+import { createTcpClientHandler } from '../src/tcp/TcpClientHandler.js';
 import { WsFrameWriter } from '../src/WsFrameWriter.js';
 import { logStandard, logVerbose } from '../src/shared/logging.js';
 import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/shared/protocol.js';

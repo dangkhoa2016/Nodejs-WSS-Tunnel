@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
-import { syncSocketReadState } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
+import { syncSocketReadState } from '../../src/tcp/TcpFlowControl.js';
 
 function mockWs(readyState = 1) {
   const sent = [];
@@ -59,7 +59,7 @@ async function createHandler(overrides = {}) {
     ...overrides,
   };
 
-  const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+  const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
   const handler = createTcpClientHandler(deps);
 
   return { handler, streams, sent, deps };

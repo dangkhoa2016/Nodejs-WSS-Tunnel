@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import net from 'node:net';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
-import { canConnect, createEchoServer } from './helpers/tcp-test-setup.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
+import { canConnect, createEchoServer } from '../helpers/tcp-test-setup.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -25,8 +25,8 @@ describe('TCP Stress Tests', () => {
     const wsPort = 25390;
     const cleanup = [];
     try {
-      const { StreamManager } = await import('../src/StreamManager.js');
-      const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+      const { StreamManager } = await import('../../src/StreamManager.js');
+      const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
       const streamManager = new StreamManager();
       const streams = streamManager.streams;
@@ -133,8 +133,8 @@ describe('TCP Stress Tests', () => {
     const cleanup = [];
     try {
       echo = await createEchoServer();
-      const { StreamManager } = await import('../src/StreamManager.js');
-      const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+      const { StreamManager } = await import('../../src/StreamManager.js');
+      const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
       const streamManager = new StreamManager();
       const streams = streamManager.streams;

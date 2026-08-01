@@ -1,6 +1,4 @@
 import net from 'node:net';
-import { syncSocketReadState } from './TcpFlowControl.js';
-import { createVirtualSocket } from './VirtualSocket.js';
 import {
   MAX_CONCURRENT_STREAMS,
   TCP_MAX_CONNECTIONS_PER_PORT,
@@ -11,10 +9,12 @@ import {
   TCP_TUNNEL_PORTS,
   WS_HIGH_WATER,
   WS_LOW_WATER,
-} from './shared/config.js';
-import { isIpAllowed } from './shared/ipAllowlist.js';
-import { logStandard, logVerbose } from './shared/logger.js';
-import { FrameCodec, PROTO, sendJsonFrame } from './shared/protocol.js';
+} from '../shared/config.js';
+import { isIpAllowed } from '../shared/ipAllowlist.js';
+import { logStandard, logVerbose } from '../shared/logger.js';
+import { FrameCodec, PROTO, sendJsonFrame } from '../shared/protocol.js';
+import { syncSocketReadState } from './TcpFlowControl.js';
+import { createVirtualSocket } from './VirtualSocket.js';
 
 const WS_OPEN = 1;
 

@@ -42,7 +42,7 @@ function buildSendJsonFrame(ws) {
 export async function setupTcpPair({ port, onClientMessage }) {
   const cleanup = [];
   const { StreamManager } = await import('../../src/StreamManager.js');
-  const { createTcpClientHandler } = await import('../../src/TcpClientHandler.js');
+  const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
   const sm = new StreamManager();
   const streams = sm.streams;

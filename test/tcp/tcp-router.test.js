@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
-import { syncSocketReadState } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
+import { syncSocketReadState } from '../../src/tcp/TcpFlowControl.js';
 
 function mockWs(readyState = 1) {
   const sent = [];
@@ -123,7 +123,7 @@ describe('TcpRouter (unit)', () => {
     const origEnv = process.env.TCP_TUNNEL_PORTS;
     process.env.TCP_TUNNEL_PORTS = '';
 
-    const { TcpRouter } = await import('../src/TcpRouter.js');
+    const { TcpRouter } = await import('../../src/tcp/TcpRouter.js');
     const router = new TcpRouter(sm, cm);
 
     // Should not throw
@@ -136,7 +136,7 @@ describe('TcpRouter (unit)', () => {
     const sm = mockStreamManager();
     const cm = mockClientManager(null); // no active client
 
-    const { TcpRouter } = await import('../src/TcpRouter.js');
+    const { TcpRouter } = await import('../../src/tcp/TcpRouter.js');
     const router = new TcpRouter(sm, cm);
 
     let destroyed = false;
@@ -235,7 +235,7 @@ describe('TcpRouter (unit)', () => {
     const ws = mockWs();
     const cm = mockClientManager(ws);
 
-    const { TcpRouter } = await import('../src/TcpRouter.js');
+    const { TcpRouter } = await import('../../src/tcp/TcpRouter.js');
     const router = new TcpRouter(sm, cm);
 
     // Simulate max connections reached

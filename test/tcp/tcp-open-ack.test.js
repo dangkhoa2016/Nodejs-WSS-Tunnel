@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -73,10 +73,10 @@ function buildSendJsonFrame(ws) {
 }
 
 async function setupAgentEnv() {
-  const { StreamManager } = await import('../src/StreamManager.js');
-  const { ClientManager } = await import('../src/ClientManager.js');
-  const { TcpRouter } = await import('../src/TcpRouter.js');
-  const { TcpAgentServer } = await import('../src/TcpAgentServer.js');
+  const { StreamManager } = await import('../../src/StreamManager.js');
+  const { ClientManager } = await import('../../src/ClientManager.js');
+  const { TcpRouter } = await import('../../src/tcp/TcpRouter.js');
+  const { TcpAgentServer } = await import('../../src/tcp/TcpAgentServer.js');
 
   const sm = new StreamManager();
   const cm = new ClientManager(sm);

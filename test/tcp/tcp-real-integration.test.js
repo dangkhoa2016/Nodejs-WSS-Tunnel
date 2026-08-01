@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
-import { canConnect } from './helpers/tcp-test-setup.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
+import { canConnect } from '../helpers/tcp-test-setup.js';
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -11,8 +11,8 @@ function sleep(ms) {
 function setupPair(port) {
   return new Promise(async (resolve) => {
     const cleanup = [];
-    const { StreamManager } = await import('../src/StreamManager.js');
-    const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+    const { StreamManager } = await import('../../src/StreamManager.js');
+    const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
     const sm = new StreamManager();
     const streams = sm.streams;

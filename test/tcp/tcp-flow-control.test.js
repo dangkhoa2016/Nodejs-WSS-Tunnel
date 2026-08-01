@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { syncSocketReadState } from '../src/TcpFlowControl.js';
+import { syncSocketReadState } from '../../src/tcp/TcpFlowControl.js';
 
 function fakeSocket() {
   return {

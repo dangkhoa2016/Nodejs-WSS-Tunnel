@@ -5,8 +5,8 @@ import http from 'node:http';
 import net from 'node:net';
 import { after, before, describe, it } from 'node:test';
 import WebSocket from 'ws';
-import { FrameCodec, PROTO } from '../src/shared/protocol.js';
-import { canConnect } from './helpers/tcp-test-setup.js';
+import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
+import { canConnect } from '../helpers/tcp-test-setup.js';
 
 function findFreePort() {
   return new Promise((resolve, reject) => {
@@ -277,7 +277,7 @@ describe('TCP agent over WebSocket (e2e)', () => {
       return;
     }
 
-    const { createTcpClientHandler } = await import('../src/TcpClientHandler.js');
+    const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
     const tunnelWs = new WebSocket(`ws://127.0.0.1:${serverPort}/tunnel`, {
       headers: { Authorization: basicAuth('admin', 'secret') },

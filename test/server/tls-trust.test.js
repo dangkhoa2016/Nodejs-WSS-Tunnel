@@ -3,7 +3,7 @@ process.env.NODE_ENV = 'test';
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-const { isAgentRequestSecure } = await import('../src/HttpRouter.js');
+const { isAgentRequestSecure } = await import('../../src/server/HttpRouter.js');
 
 function makeReq({ encrypted = false, remoteAddress = '127.0.0.1', headers = {} } = {}) {
   return {

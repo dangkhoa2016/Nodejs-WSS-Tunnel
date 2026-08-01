@@ -1,8 +1,5 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
-import { ClientManager } from './ClientManager.js';
-import { HttpRouter } from './HttpRouter.js';
-import { StreamManager } from './StreamManager.js';
 import {
   INSTALL_UUID,
   PORT,
@@ -14,10 +11,13 @@ import {
   TUNNEL_PATH,
   WS_MAX_PAYLOAD,
   validateConfig,
-} from './shared/config.js';
-import { logError, logStandard, logVerbose } from './shared/logger.js';
-import { TcpAgentServer } from './tcp/TcpAgentServer.js';
-import { TcpRouter } from './tcp/TcpRouter.js';
+} from '../shared/config.js';
+import { logError, logStandard, logVerbose } from '../shared/logger.js';
+import { TcpAgentServer } from '../tcp/TcpAgentServer.js';
+import { TcpRouter } from '../tcp/TcpRouter.js';
+import { ClientManager } from './ClientManager.js';
+import { HttpRouter } from './HttpRouter.js';
+import { StreamManager } from './StreamManager.js';
 
 const GRACEFUL_TIMEOUT_MS = 10_000;
 
@@ -42,7 +42,6 @@ export class TunnelServer {
     this.clientManager = new ClientManager(this.streamManager);
     this.httpRouter = new HttpRouter(this.streamManager, this.clientManager);
     this.tcpRouter = new TcpRouter(this.streamManager, this.clientManager);
-
     this.tcpAgentServer = new TcpAgentServer(this.streamManager, this.tcpRouter, {
       allowedPorts: TCP_AGENT_ALLOWED_PORTS,
       maxConnectionsPerPort: TCP_MAX_CONNECTIONS_PER_PORT,
@@ -65,9 +64,9 @@ export class TunnelServer {
 
   async _closeComponents() {
     const results = await Promise.allSettled([
-      this.tcpAgentServer.close(),
       this.tcpRouter.close(),
       this.clientManager.close(),
+      this.tcpAgentServer.close(),
       closeWithCallback(this._server),
       closeWithCallback(this._wss),
       closeWithCallback(this._agentWss),

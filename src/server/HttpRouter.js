@@ -15,25 +15,25 @@ import {
   TCP_AGENT_TRUSTED_PROXIES,
   TCP_AGENT_USERNAME,
   TUNNEL_PATH,
-} from './shared/config.js';
-import { isIpAllowed } from './shared/ipAllowlist.js';
-import { getConfig, logStandard, logVerbose, setConfig } from './shared/logger.js';
-import { FrameCodec, PROTO } from './shared/protocol.js';
-import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './shared/utils.js';
+} from '../shared/config.js';
+import { isIpAllowed } from '../shared/ipAllowlist.js';
+import { getConfig, logStandard, logVerbose, setConfig } from '../shared/logger.js';
+import { FrameCodec, PROTO } from '../shared/protocol.js';
+import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from '../shared/utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.resolve(__dirname, '..');
+const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 
 export function isAgentRequestSecure(req, trustedProxies) {
   if (req.socket?.encrypted) return true;
   if (!trustedProxies || trustedProxies.length === 0) return false;
   if (!isIpAllowed(req.socket?.remoteAddress, trustedProxies)) return false;
-  const proto = String(req.headers['x-forwarded-proto'] || '')
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
     .split(',')[0]
     .trim()
     .toLowerCase();
-  return proto === 'https';
+  return forwardedProto === 'https';
 }
 
 export class HttpRouter {

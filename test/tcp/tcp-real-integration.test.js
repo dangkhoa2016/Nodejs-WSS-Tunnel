@@ -11,7 +11,7 @@ function sleep(ms) {
 function setupPair(port) {
   return new Promise(async (resolve) => {
     const cleanup = [];
-    const { StreamManager } = await import('../../src/StreamManager.js');
+    const { StreamManager } = await import('../../src/server/StreamManager.js');
     const { createTcpClientHandler } = await import('../../src/tcp/TcpClientHandler.js');
 
     const sm = new StreamManager();

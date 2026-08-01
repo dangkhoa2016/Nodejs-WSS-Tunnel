@@ -1,7 +1,7 @@
 import { Writable } from 'node:stream';
 import WebSocket from 'ws';
-import { DRAIN_TIMEOUT_MS, MAX_FRAME_PAYLOAD, WS_HIGH_WATER } from './shared/config.js';
-import { FrameCodec, PROTO, sendFrame } from './shared/protocol.js';
+import { DRAIN_TIMEOUT_MS, MAX_FRAME_PAYLOAD, WS_HIGH_WATER } from '../shared/config.js';
+import { FrameCodec, PROTO, sendFrame } from '../shared/protocol.js';
 
 export function waitDrain(ws) {
   return new Promise((resolve, reject) => {

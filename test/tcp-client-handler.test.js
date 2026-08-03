@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
+import { PROTO } from '../src/protocol.js';
 import { syncSocketReadState } from '../src/TcpFlowControl.js';
-import { FrameCodec, PROTO } from '../src/protocol.js';
 
 function mockWs(readyState = 1) {
   const sent = [];
   return {
     readyState,
     bufferedAmount: 0,
-    send(data, opts, cb) {
+    send(data, _opts, cb) {
       sent.push(data);
       if (typeof cb === 'function') cb();
     },
@@ -68,7 +68,7 @@ async function createHandler(overrides = {}) {
 describe('TcpClientHandler', () => {
   describe('handleServerFrame routing', () => {
     it('handles TCP_OPEN and returns true', async () => {
-      const { handler, sent } = await createHandler();
+      const { handler } = await createHandler();
 
       const ws = mockWs();
       const payload = Buffer.from(JSON.stringify({ host: '127.0.0.1', port: 6379 }));
@@ -224,16 +224,13 @@ describe('TcpClientHandler', () => {
     });
 
     it('releases pause only after both reasons clear (peer first)', async () => {
-      const { streams } = await createHandler();
+      await createHandler();
       const streamId = 1;
 
-      let pauseCalls = 0;
       let resumeCalls = 0;
       const localSocket = {
         destroyed: false,
-        pause() {
-          pauseCalls++;
-        },
+        pause() {},
         resume() {
           resumeCalls++;
         },
@@ -257,16 +254,13 @@ describe('TcpClientHandler', () => {
     });
 
     it('releases pause only after both reasons clear (WS first)', async () => {
-      const { streams } = await createHandler();
+      await createHandler();
       const streamId = 1;
 
-      let pauseCalls = 0;
       let resumeCalls = 0;
       const localSocket = {
         destroyed: false,
-        pause() {
-          pauseCalls++;
-        },
+        pause() {},
         resume() {
           resumeCalls++;
         },

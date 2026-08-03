@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import { describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
 import { FrameCodec, PROTO } from '../src/protocol.js';
@@ -205,7 +204,7 @@ describe('TCP Stress Tests', () => {
       await sleep(500);
 
       let leaked = 0;
-      for (const [key, val] of streams) {
+      for (const [, val] of streams) {
         if (val.mode === 'tcp' && !val.cleaned) leaked++;
       }
       assert.equal(leaked, 0, `expected 0 leaked TCP streams, got ${leaked}`);

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 
 const PORT = 17890;
 const DISABLED_PORT = 17891;

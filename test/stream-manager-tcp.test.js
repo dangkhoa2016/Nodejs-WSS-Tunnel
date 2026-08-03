@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import net from 'node:net';
 import { beforeEach, describe, it } from 'node:test';
 import WebSocket from 'ws';
 
@@ -209,7 +208,7 @@ describe('StreamManager - TCP lifecycle', () => {
       const socket = mockSocket();
       const streamId = sm.allocateStreamId();
 
-      const state = sm.createTcpStream({ ws, socket, serverPort: 6379, streamId });
+      sm.createTcpStream({ ws, socket, serverPort: 6379, streamId });
 
       let written = null;
       socket.write = (data) => {

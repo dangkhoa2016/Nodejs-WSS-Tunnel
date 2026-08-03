@@ -1,10 +1,6 @@
 import http from 'node:http';
 import { WebSocketServer } from 'ws';
 import { ClientManager } from './ClientManager.js';
-import { HttpRouter } from './HttpRouter.js';
-import { StreamManager } from './StreamManager.js';
-import { TcpAgentServer } from './TcpAgentServer.js';
-import { TcpRouter } from './TcpRouter.js';
 import {
   INSTALL_UUID,
   PORT,
@@ -14,10 +10,14 @@ import {
   TCP_AGENT_PATH,
   TCP_MAX_CONNECTIONS_PER_PORT,
   TUNNEL_PATH,
-  WS_MAX_PAYLOAD,
   validateConfig,
+  WS_MAX_PAYLOAD,
 } from './config.js';
+import { HttpRouter } from './HttpRouter.js';
 import { logStandard, logVerbose } from './logger.js';
+import { StreamManager } from './StreamManager.js';
+import { TcpAgentServer } from './TcpAgentServer.js';
+import { TcpRouter } from './TcpRouter.js';
 
 const GRACEFUL_TIMEOUT_MS = 10_000;
 
@@ -112,7 +112,7 @@ export class TunnelServer {
       }
     });
 
-    this._server.on('clientError', (err, socket) => {
+    this._server.on('clientError', (_err, socket) => {
       try {
         if (socket.writable) {
           socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
@@ -122,7 +122,7 @@ export class TunnelServer {
       }
     });
 
-    this._server.on('connect', (req, socket) => {
+    this._server.on('connect', (_req, socket) => {
       try {
         if (socket.writable) {
           socket.end('HTTP/1.1 501 Not Implemented\r\n\r\n');

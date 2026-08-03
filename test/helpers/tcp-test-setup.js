@@ -132,4 +132,4 @@ export function canConnect(host, port, timeout = 500) {
   });
 }
 
-export { PROTO, sleep, FrameCodec };
+export { FrameCodec, PROTO, sleep };

@@ -33,7 +33,7 @@ function mockRes() {
     get writableEnded() {
       return ended;
     },
-    writeHead(status, msg, headers) {
+    writeHead(_status, _msg, _headers) {
       headersWritten = true;
     },
     end() {

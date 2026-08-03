@@ -6,11 +6,10 @@ import { pipeline } from 'node:stream';
 import { URL } from 'node:url';
 
 import WebSocket from 'ws';
-
-import { createTcpClientHandler } from '../src/TcpClientHandler.js';
-import { WsFrameWriter } from '../src/WsFrameWriter.js';
 import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/protocol.js';
+import { createTcpClientHandler } from '../src/TcpClientHandler.js';
 import { sanitizeHeaders } from '../src/utils.js';
+import { WsFrameWriter } from '../src/WsFrameWriter.js';
 
 if (process.env.NODE_ENV === 'development') {
   try {
@@ -55,7 +54,6 @@ const TARGET_ORIGIN = (() => {
 
 const MAX_CONCURRENT_STREAMS = Number(process.env.MAX_CONCURRENT_STREAMS || 200);
 const STREAM_IDLE_TIMEOUT_MS = Number(process.env.STREAM_IDLE_TIMEOUT_MS || 120000);
-const DRAIN_TIMEOUT_MS = Number(process.env.DRAIN_TIMEOUT_MS || 30000);
 
 const WS_HIGH_WATER = Number(process.env.WS_HIGH_WATER_BYTES || 1 * 1024 * 1024);
 const MAX_FRAME_PAYLOAD = Number(process.env.MAX_FRAME_PAYLOAD_BYTES || 256 * 1024);

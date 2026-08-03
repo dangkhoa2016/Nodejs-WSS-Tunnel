@@ -16,7 +16,6 @@ import {
   TUNNEL_PATH,
 } from './config.js';
 import { getConfig, logStandard, logVerbose, setConfig } from './logger.js';
-import { FrameCodec, PROTO } from './protocol.js';
 import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from './utils.js';
 
 const __filename = fileURLToPath(import.meta.url);

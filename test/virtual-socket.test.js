@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { describe, it } from 'node:test';
-import { createVirtualSocket } from '../src/VirtualSocket.js';
 import { MAX_DEST_BUFFER_BYTES, WS_HIGH_WATER, WS_LOW_WATER } from '../src/config.js';
 import { FrameCodec, PROTO } from '../src/protocol.js';
+import { createVirtualSocket } from '../src/VirtualSocket.js';
 
 function nextTick() {
   return new Promise((resolve) => process.nextTick(resolve));
@@ -14,7 +14,7 @@ function createFakeAgentWs() {
   ws.readyState = 1;
   ws.bufferedAmount = 0;
   ws.sent = [];
-  ws.send = (frame, opts, cb) => {
+  ws.send = (frame, _opts, cb) => {
     ws.bufferedAmount += frame.length;
     ws.sent.push(FrameCodec.parseFrame(frame));
     if (typeof cb === 'function') process.nextTick(cb);

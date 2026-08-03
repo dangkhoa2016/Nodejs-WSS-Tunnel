@@ -1,6 +1,6 @@
-import { syncTcpBackpressure } from './TcpFlowControl.js';
 import { logVerbose } from './logger.js';
 import { FrameCodec, PROTO, sendJsonFrame } from './protocol.js';
+import { syncTcpBackpressure } from './TcpFlowControl.js';
 
 export class TcpAgentServer {
   constructor(streamManager, tcpRouter, options = {}) {
@@ -68,7 +68,7 @@ export class TcpAgentServer {
       }
 
       const state = this.streamManager.streams.get(streamId);
-      if (!state || state.mode !== 'tcp' || !state.socket?.isVirtual) return;
+      if (state?.mode !== 'tcp' || !state.socket?.isVirtual) return;
       if (state.agentWs !== ws) return;
 
       switch (type) {

@@ -9,7 +9,7 @@ export function syncSocketReadState(state, socket) {
 }
 
 export function syncTcpBackpressure(state) {
-  if (!state || !state.ws) return;
+  if (!state?.ws) return;
   const shouldPause = Boolean(state.agentPaused || state.wsBackpressured);
   if (shouldPause && !state.clientPausedForAgent) {
     state.clientPausedForAgent = true;

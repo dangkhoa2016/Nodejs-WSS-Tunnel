@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { FrameCodec, PROTO, createEchoServer, setupTcpPair, sleep } from '../helpers/tcp-test-setup.js';
+import { createEchoServer, FrameCodec, PROTO, setupTcpPair, sleep } from '../helpers/tcp-test-setup.js';
 
 describe('WS disconnect cleanup', () => {
   it('cleanupTcpStreams destroys all TCP streams', { timeout: 10000 }, async () => {

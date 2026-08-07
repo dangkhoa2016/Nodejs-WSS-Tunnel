@@ -1,4 +1,5 @@
 process.env.NODE_ENV = 'test';
+
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { describe, it, test } from 'node:test';

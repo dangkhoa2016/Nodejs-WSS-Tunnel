@@ -9,8 +9,8 @@ import {
   TCP_AGENT_PATH,
   TCP_MAX_CONNECTIONS_PER_PORT,
   TUNNEL_PATH,
-  WS_MAX_PAYLOAD,
   validateConfig,
+  WS_MAX_PAYLOAD,
 } from '../shared/config.js';
 import { logError, logStandard, logVerbose } from '../shared/logger.js';
 import { TcpAgentServer } from '../tcp/TcpAgentServer.js';

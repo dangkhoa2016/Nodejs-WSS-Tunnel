@@ -68,7 +68,7 @@ export class TcpAgentServer {
       }
 
       const state = this.streamManager.streams.get(streamId);
-      if (!state || state.mode !== 'tcp' || !state.socket?.isVirtual) {
+      if (state?.mode !== 'tcp' || !state.socket?.isVirtual) {
         logVerbose('tcp', 'agent_stream_missing', { streamId, type, reason: 'stream_not_found' });
         if (type === PROTO.TYPE.TCP_DATA || type === PROTO.TYPE.TCP_CLOSE) {
           sendJsonFrame(ws, PROTO.TYPE.TCP_ABORT, streamId, { message: 'Stream not found' });

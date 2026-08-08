@@ -14,7 +14,7 @@ function createFakeAgentWs() {
   ws.readyState = 1;
   ws.bufferedAmount = 0;
   ws.sent = [];
-  ws.send = (frame, opts, cb) => {
+  ws.send = (frame, _opts, cb) => {
     ws.bufferedAmount += frame.length;
     ws.sent.push(FrameCodec.parseFrame(frame));
     if (typeof cb === 'function') process.nextTick(cb);

@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import http from 'node:http';
-import { after, test } from 'node:test';
+import { test } from 'node:test';
 
 const PORT = 17890;
 const DISABLED_PORT = 17891;

@@ -59,7 +59,7 @@ function wsOpen(url, authHeader, extraHeaders = {}) {
       resolve(true);
     });
     ws.on('error', (err) => reject(err));
-    ws.on('unexpected-response', (req, res) => {
+    ws.on('unexpected-response', (_req, res) => {
       let body = '';
       res.on('data', (chunk) => {
         body += chunk;

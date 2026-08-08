@@ -1,7 +1,7 @@
 import { Writable } from 'node:stream';
 import WebSocket from 'ws';
 import { DRAIN_TIMEOUT_MS, MAX_FRAME_PAYLOAD, WS_HIGH_WATER } from '../shared/config.js';
-import { FrameCodec, PROTO, sendFrame } from '../shared/protocol.js';
+import { FrameCodec, sendFrame } from '../shared/protocol.js';
 
 export function waitDrain(ws) {
   return new Promise((resolve, reject) => {
@@ -45,7 +45,7 @@ export class WsFrameWriter extends Writable {
     this._writerClosed = false;
   }
 
-  _write(chunk, encoding, callback) {
+  _write(chunk, _encoding, callback) {
     if (this._writerClosed || this.destroyed) {
       callback(new Error('WsFrameWriter is closed'));
       return;

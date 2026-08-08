@@ -108,7 +108,7 @@ function startEchoServer() {
   });
 }
 
-function runInstaller(workDir, tunnelPort, echoPort, homeDir, timeoutMs) {
+function runInstaller(_workDir, tunnelPort, echoPort, homeDir, timeoutMs) {
   return spawnProcess('bash', ['serve/setup.sh'], {
     cwd: process.cwd(),
     env: {

@@ -28,7 +28,6 @@ export function createTcpClientHandler(deps) {
     buildFrame,
     parseJsonPayload,
     resetIdleTimer,
-    cleanupStream,
   } = deps;
 
   const ALLOWED_HOSTS = new Set(TCP_CLIENT_ALLOWED_HOSTS || [TCP_TUNNEL_HOST]);
@@ -68,7 +67,7 @@ export function createTcpClientHandler(deps) {
   // Direction 2: WS -> local TCP socket. Write handler for backpressure.
   // ---------------------------------------------------------------------------
 
-  function startWsToLocalPump(state) {
+  function _startWsToLocalPump(_state) {
     // Backpressure is handled by the server side (TcpRouter).
     // The client side only needs to write incoming TCP_DATA to the local socket.
     // Pause/Resume of the local socket is handled by PAUSE/RESUME frames.

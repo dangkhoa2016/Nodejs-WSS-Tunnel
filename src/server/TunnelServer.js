@@ -9,8 +9,8 @@ import {
   TCP_AGENT_PATH,
   TCP_MAX_CONNECTIONS_PER_PORT,
   TUNNEL_PATH,
-  WS_MAX_PAYLOAD,
   validateConfig,
+  WS_MAX_PAYLOAD,
 } from '../shared/config.js';
 import { logError, logStandard, logVerbose } from '../shared/logger.js';
 import { TcpAgentServer } from '../tcp/TcpAgentServer.js';
@@ -115,7 +115,7 @@ export class TunnelServer {
       }
     });
 
-    this._server.on('clientError', (err, socket) => {
+    this._server.on('clientError', (_err, socket) => {
       try {
         if (socket.writable) {
           socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
@@ -125,7 +125,7 @@ export class TunnelServer {
       }
     });
 
-    this._server.on('connect', (req, socket) => {
+    this._server.on('connect', (_req, socket) => {
       try {
         if (socket.writable) {
           socket.end('HTTP/1.1 501 Not Implemented\r\n\r\n');

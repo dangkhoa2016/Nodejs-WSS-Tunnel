@@ -18,7 +18,6 @@ import {
 } from '../shared/config.js';
 import { isIpAllowed } from '../shared/ipAllowlist.js';
 import { getConfig, logStandard, logVerbose, setConfig } from '../shared/logger.js';
-import { FrameCodec, PROTO } from '../shared/protocol.js';
 import { sanitizeHeaders, validateHmacSignature, verifyBasicAuth } from '../shared/utils.js';
 
 const __filename = fileURLToPath(import.meta.url);

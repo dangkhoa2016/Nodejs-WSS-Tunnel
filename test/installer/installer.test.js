@@ -8,7 +8,7 @@ import { test } from 'node:test';
 const MINIMAL_PKG = JSON.stringify({ name: 'test-client', version: '1.0.0', type: 'module', private: true });
 const INSTALL_UUID = 'test-install';
 
-function createTestServer(port, bundlePath, pkgContent, installUuid) {
+function createTestServer(_port, bundlePath, pkgContent, installUuid) {
   const bundle = fs.readFileSync(bundlePath);
   return http.createServer((req, res) => {
     if (req.url === `/${installUuid}-client.js`) {

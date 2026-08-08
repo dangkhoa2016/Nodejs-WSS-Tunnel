@@ -1,1 +1,1 @@
-export { logStandard, logVerbose, logError, getConfig, setConfig } from './logging.js';
+export { getConfig, logError, logStandard, logVerbose, setConfig } from './logging.js';

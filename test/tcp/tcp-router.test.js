@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import net from 'node:net';
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { afterEach, describe, it } from 'node:test';
 import { FrameCodec, PROTO } from '../../src/shared/protocol.js';
 import { syncSocketReadState } from '../../src/tcp/TcpFlowControl.js';
 
@@ -10,7 +10,7 @@ function mockWs(readyState = 1) {
     readyState,
     bufferedAmount: 0,
     _socket: { remoteAddress: '127.0.0.1' },
-    send(data, opts, cb) {
+    send(data, _opts, cb) {
       sent.push(data);
       if (typeof cb === 'function') cb();
     },
@@ -70,7 +70,7 @@ function mockStreamManager() {
         } catch {}
       if (typeof state.onCleanup === 'function') state.onCleanup();
     },
-    abortTcpStream(state, reason, notifyClient) {
+    abortTcpStream(state, _reason, notifyClient) {
       if (state.cleaned) return;
       if (state.ws && state.ws.readyState === 1 && !state.abortSent && notifyClient) {
         state.abortSent = true;
@@ -83,11 +83,11 @@ function mockStreamManager() {
   };
 }
 
-function mockTcpRouter(overrides = {}) {
+function _mockTcpRouter(overrides = {}) {
   return {
     _servers: new Map(),
     _connCountByPort: new Map(),
-    _listenOnPort(port) {},
+    _listenOnPort(_port) {},
     ...overrides,
   };
 }
@@ -95,7 +95,7 @@ function mockTcpRouter(overrides = {}) {
 describe('TcpRouter (unit)', () => {
   let servers = [];
 
-  function createTcpServer(port) {
+  function _createTcpServer(port) {
     return new Promise((resolve, reject) => {
       const server = net.createServer((socket) => {
         socket.on('data', () => {});
@@ -161,14 +161,14 @@ describe('TcpRouter (unit)', () => {
   });
 
   it('pause reasons coordinate: peer resume alone keeps socket paused', () => {
-    let pauseCalls = 0;
+    let _pauseCalls = 0;
     let resumeCalls = 0;
     const mockSocket = {
       remoteAddress: '127.0.0.1',
       remotePort: 55555,
       destroyed: false,
       pause() {
-        pauseCalls++;
+        _pauseCalls++;
       },
       resume() {
         resumeCalls++;
@@ -196,14 +196,14 @@ describe('TcpRouter (unit)', () => {
   });
 
   it('pause reasons coordinate: WS release alone keeps socket paused', () => {
-    let pauseCalls = 0;
+    let _pauseCalls = 0;
     let resumeCalls = 0;
     const mockSocket = {
       remoteAddress: '127.0.0.1',
       remotePort: 55555,
       destroyed: false,
       pause() {
-        pauseCalls++;
+        _pauseCalls++;
       },
       resume() {
         resumeCalls++;

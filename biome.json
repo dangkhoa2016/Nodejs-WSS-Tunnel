@@ -1,12 +1,10 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-  "organizeImports": {
-    "enabled": true
-  },
+  "$schema": "https://biomejs.dev/schemas/2.5.7/schema.json",
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "noNonNullAssertion": "off"
       },
@@ -37,15 +35,19 @@
     }
   },
   "files": {
-    "include": [
-      "src/**/*.js",
-      "serve/**/*.js",
-      "serve/**/*.sh",
-      "test/**/*.js",
-      "client.js",
-      "biome.json",
-      "package.json"
-    ],
-    "ignore": ["dist/", "node_modules/", ".yarn/", "temp/", "coverage/"]
+    "includes": [
+      "**/src/**/*.js",
+      "**/serve/**/*.js",
+      "**/serve/**/*.sh",
+      "**/test/**/*.js",
+      "**/client.js",
+      "**/biome.json",
+      "**/package.json",
+      "!**/dist",
+      "!**/node_modules/",
+      "!**/.yarn/",
+      "!**/temp/",
+      "!**/coverage/"
+    ]
   }
 }

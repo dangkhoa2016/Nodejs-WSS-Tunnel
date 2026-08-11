@@ -78,19 +78,40 @@ type(scope): short description
 - Use `type(scope): imperative summary` or `type: imperative summary`.
 - Keep the subject at or below 72 characters.
 - Separate the body with one blank line.
-- Start every body item with `- `; indent wrapped lines by two spaces.
+- Start every body item with `- ` and keep each bullet on a single line.
 - Keep commits below 1,000 changed lines and split unrelated concerns.
 - Do not mix dependency updates with formatting or behavior changes.
 - Automated merge commits are exempt only when the repository uses GitHub's
   generated merge messages; squash merges must follow the normal policy.
 
-Types: `feat`, `fix`, `refactor`, `test`, `docs`, `ci`, `chore`.
+Types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`,
+`revert`, `style`, `test`.
 
 Examples:
 - `feat: add HMAC verification to admin endpoint`
 - `fix: handle WebSocket reconnection exponential backoff`
 - `chore(deps): bump ws from 8.20.0 to 8.21.1`
 - `test: add end-to-end TCP tunnel agent test`
+
+### History policy audit
+
+CI enforces the history policy on every pull request with
+`scripts/audit-commits.js`. Run the same check locally before opening a PR:
+
+```bash
+yarn audit:commits --base origin/main --head HEAD
+```
+
+The audit rejects:
+
+- Subjects longer than 72 characters.
+- Subjects that do not follow Conventional Commits
+  (`type(scope)!?: description`, types: `build`, `chore`, `ci`, `docs`,
+  `feat`, `fix`, `perf`, `refactor`, `revert`, `style`, `test`).
+- Body lines that are neither `- ` bullets nor valid Git trailers such as
+  `Signed-off-by:`.
+- Commits with at least 1,000 lines of changed code (additions plus
+  deletions). Binary files reported as `-` by `git --numstat` are ignored.
 
 ## Pull Request Process
 

@@ -94,6 +94,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             echo "Auditing ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "Auditing ${{ github.event.before }}..${{ github.event.after }}"
           fi
       - name: Audit pull request commits
         if: github.event_name == 'pull_request'
@@ -101,6 +103,9 @@ jobs:
           node scripts/audit-commits.js \
             --base "${{ github.event.pull_request.base.sha }}" \
             --head "${{ github.event.pull_request.head.sha }}"
+      - name: Audit commits pushed to main
+        if: github.event_name == 'push'
+        run: bash scripts/audit-push.sh "${{ github.event.before }}" "${{ github.event.after }}"
 
   docker:
     runs-on: ubuntu-latest

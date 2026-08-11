@@ -81,8 +81,9 @@ type(scope): short description
 - Start every body item with `- ` and keep each bullet on a single line.
 - Keep commits below 1,000 changed lines and split unrelated concerns.
 - Do not mix dependency updates with formatting or behavior changes.
-- Automated merge commits are exempt only when the repository uses GitHub's
-  generated merge messages; squash merges must follow the normal policy.
+- Merge commits must follow the same subject and body rules. GitHub-generated
+  merge messages rarely do, so edit them before merging or use squash merges;
+  CI audits the resulting history on every push to `main`.
 
 Types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`, `refactor`,
 `revert`, `style`, `test`.
@@ -95,8 +96,9 @@ Examples:
 
 ### History policy audit
 
-CI enforces the history policy on every pull request with
-`scripts/audit-commits.js`. Run the same check locally before opening a PR:
+CI enforces the history policy on every pull request and on every push to
+`main` with `scripts/audit-commits.js`. Run the same check locally before
+opening a PR:
 
 ```bash
 yarn audit:commits --base origin/main --head HEAD

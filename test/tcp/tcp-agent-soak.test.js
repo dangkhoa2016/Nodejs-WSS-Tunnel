@@ -46,8 +46,12 @@ function listen(wss) {
   return new Promise((r) => wss.on('listening', r));
 }
 
-function closeWithTimeout(close, timeout = 5000) {
-  return Promise.race([close(), sleep(timeout)]);
+function closeWithTimeout(close, label, timeout = 5000) {
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`cleanup timed out: ${label}`)), timeout);
+  });
+  return Promise.race([Promise.resolve().then(close), timeoutPromise]).finally(() => clearTimeout(timer));
 }
 
 function open(ws) {
@@ -212,9 +216,9 @@ async function setupSoakEnv() {
       } catch {
         /* ignore */
       }
-      await closeWithTimeout(() => new Promise((r) => agentWss.close(r)));
-      await closeWithTimeout(() => new Promise((r) => tunnelWss.close(r)));
-      await closeWithTimeout(() => echo.close());
+      await closeWithTimeout(() => new Promise((r) => agentWss.close(r)), 'agent wss');
+      await closeWithTimeout(() => new Promise((r) => tunnelWss.close(r)), 'tunnel wss');
+      await closeWithTimeout(() => echo.close(), 'echo server');
     },
   };
 }
@@ -306,6 +310,18 @@ async function forceAgentReconnect(env) {
   assert.equal(env.agentServer._agentStreams.size, 1, 'agent must reconnect after the WebSocket drop');
 }
 
+describe('closeWithTimeout', () => {
+  it('rejects with the resource label when cleanup exceeds the timeout', async () => {
+    const never = () => new Promise(() => {});
+    await assert.rejects(closeWithTimeout(never, 'fixture', 50), /cleanup timed out: fixture/);
+  });
+
+  it('resolves when cleanup completes in time', async () => {
+    const quick = () => Promise.resolve();
+    await closeWithTimeout(quick, 'fixture', 100);
+  });
+});
+
 describe('TCP agent soak', { skip: !runSoak }, () => {
   it('keeps streams, sockets, and counters clean across bounded reconnect cycles', { timeout: 1800000 }, async (t) => {
     const echo = await createTrackedEchoServer('127.0.0.2').catch((err) => {
@@ -318,7 +334,7 @@ describe('TCP agent soak', { skip: !runSoak }, () => {
       t.skip('127.0.0.2 loopback alias unavailable');
       return;
     }
-    await closeWithTimeout(() => echo.close());
+    await closeWithTimeout(() => echo.close(), 'echo server');
     const env = await setupSoakEnv();
     const agentProc = spawnSoakAgent(env.agentWss.address().port, env.echo.port);
     const ownedSockets = new Set();

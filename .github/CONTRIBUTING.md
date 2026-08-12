@@ -115,6 +115,36 @@ The audit rejects:
 - Commits with at least 1,000 lines of changed code (additions plus
   deletions). Binary files reported as `-` by `git --numstat` are ignored.
 
+### TCP agent soak tests
+
+The TCP agent soak suite exercises bounded reconnect and short-lived
+connection cycles against a real `serve/tcp-agent.js` subprocess. It is
+opt-in so it never slows the default suite:
+
+```bash
+# Short smoke run (~10 cycles x 5 connections)
+SOAK_CYCLES=10 SOAK_CONCURRENCY=5 corepack yarn test:soak
+
+# Default parameters (100 cycles x 20 connections, ~15 seconds)
+corepack yarn test:soak
+
+# Scheduled-equivalent workload (500 cycles x 25 connections)
+SOAK_CYCLES=500 SOAK_CONCURRENCY=25 corepack yarn test:soak
+```
+
+Tunables:
+
+- `SOAK_CYCLES` (default `100`): number of connection batches.
+- `SOAK_CONCURRENCY` (default `20`): connections opened per batch.
+- `SOAK_RECONNECT_EVERY` (default `10`): terminate the agent WebSocket and
+  await reconnection every N cycles. Keep it at or below `SOAK_CYCLES` so the
+  reconnect path is actually exercised.
+
+The soak needs the `127.0.0.1` and `127.0.0.2` loopback addresses; it skips
+cleanly when the `127.0.0.2` alias is unavailable. It requires no external
+services. CI runs the scheduled-equivalent workload weekly and on demand via
+`.github/workflows/soak.yml` and uploads `/tmp/soak.log` on failure.
+
 ## Pull Request Process
 
 1. Ensure `yarn check` passes cleanly without errors

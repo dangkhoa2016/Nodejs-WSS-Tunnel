@@ -1,0 +1,39 @@
+name: TCP agent soak
+
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: soak-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: test
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: yarn install --immutable
+      - name: Run bounded soak workload
+        run: |
+          corepack yarn test:soak 2>&1 | tee /tmp/soak.log
+        env:
+          SOAK_CYCLES: '500'
+          SOAK_CONCURRENCY: '25'
+      - name: Upload soak log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-log
+          path: |
+            /tmp/soak.log
+          if-no-files-found: error

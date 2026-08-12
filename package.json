@@ -13,6 +13,7 @@
     "format": "biome format --write .",
     "audit:commits": "node scripts/audit-commits.js",
     "test:protocol-negative": "NODE_ENV=test node --test test/tcp/protocol-negative.test.js",
+    "test:soak": "RUN_SOAK=1 NODE_ENV=test node --test test/tcp/tcp-agent-soak.test.js",
     "build:client": "node serve/build.js",
     "check": "yarn lint && yarn test && yarn build:client"
   },

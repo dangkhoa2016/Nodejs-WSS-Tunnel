@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { appendFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import net from 'node:net';
-import { describe, it } from 'node:test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, describe, it } from 'node:test';
 import WebSocket, { WebSocketServer } from 'ws';
 import { FrameCodec } from '../../src/shared/protocol.js';
 import { sleep } from '../helpers/tcp-test-setup.js';
@@ -40,6 +43,25 @@ async function waitFor(cond, timeout = 5000, interval = 50) {
     await sleep(interval);
   }
   throw new Error('waitFor timed out');
+}
+
+function snapshotResources(env, ownedSockets, cycle, phase) {
+  return {
+    timestamp: new Date().toISOString(),
+    cycle,
+    phase,
+    streams: env.sm.streams.size,
+    portConnections: env.agentServer._connCountByPort.get(env.echo.port) || 0,
+    agentConnections: env.agentServer._agentStreams.size,
+    ownedSockets: ownedSockets.size,
+    echoSockets: env.echo.sockets.size,
+  };
+}
+
+function appendResourceSnapshot(env, ownedSockets, cycle, phase) {
+  const logPath = process.env.SOAK_RESOURCE_LOG;
+  if (!logPath) return;
+  appendFileSync(logPath, `${JSON.stringify(snapshotResources(env, ownedSockets, cycle, phase))}\n`);
 }
 
 function listen(wss) {
@@ -322,6 +344,59 @@ describe('closeWithTimeout', () => {
   });
 });
 
+describe('snapshotResources', () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'soak-snapshot-'));
+  after(() => rmSync(tmpDir, { recursive: true, force: true }));
+
+  function makeEnv() {
+    return {
+      sm: { streams: new Set([1, 2]) },
+      agentServer: {
+        _connCountByPort: new Map([[7000, 3]]),
+        _agentStreams: new Set([1]),
+      },
+      echo: { port: 7000, sockets: new Set([1, 2, 3]) },
+    };
+  }
+
+  it('appends one JSON line per phase with all required keys', () => {
+    const logPath = join(tmpDir, 'resources.jsonl');
+    const previous = process.env.SOAK_RESOURCE_LOG;
+    process.env.SOAK_RESOURCE_LOG = logPath;
+    try {
+      appendResourceSnapshot(makeEnv(), new Set([1]), 4, 'after-batch');
+      appendResourceSnapshot(makeEnv(), new Set([1]), 5, 'before-reconnect');
+    } finally {
+      if (previous === undefined) delete process.env.SOAK_RESOURCE_LOG;
+      else process.env.SOAK_RESOURCE_LOG = previous;
+    }
+    const lines = readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+    assert.equal(lines.length, 2);
+    for (const line of lines) {
+      const entry = JSON.parse(line);
+      assert.equal(typeof entry.timestamp, 'string');
+      assert.equal(typeof entry.cycle, 'number');
+      assert.equal(typeof entry.phase, 'string');
+      assert.equal(entry.streams, 2);
+      assert.equal(entry.portConnections, 3);
+      assert.equal(entry.agentConnections, 1);
+      assert.equal(entry.ownedSockets, 1);
+      assert.equal(entry.echoSockets, 3);
+    }
+  });
+
+  it('writes nothing when SOAK_RESOURCE_LOG is unset', () => {
+    const previous = process.env.SOAK_RESOURCE_LOG;
+    delete process.env.SOAK_RESOURCE_LOG;
+    try {
+      appendResourceSnapshot(makeEnv(), new Set(), 0, 'after-batch');
+    } finally {
+      if (previous === undefined) delete process.env.SOAK_RESOURCE_LOG;
+      else process.env.SOAK_RESOURCE_LOG = previous;
+    }
+  });
+});
+
 describe('TCP agent soak', { skip: !runSoak }, () => {
   it('keeps streams, sockets, and counters clean across bounded reconnect cycles', { timeout: 1800000 }, async (t) => {
     const echo = await createTrackedEchoServer('127.0.0.2').catch((err) => {
@@ -349,8 +424,11 @@ describe('TCP agent soak', { skip: !runSoak }, () => {
 
       for (let cycle = 0; cycle < PARAMS.cycles; cycle++) {
         await runBatch(env, ownedSockets, cycle);
+        appendResourceSnapshot(env, ownedSockets, cycle, 'after-batch');
         if ((cycle + 1) % PARAMS.reconnectEvery === 0) {
+          appendResourceSnapshot(env, ownedSockets, cycle, 'before-reconnect');
           await forceAgentReconnect(env);
+          appendResourceSnapshot(env, ownedSockets, cycle, 'after-reconnect');
         }
       }
 

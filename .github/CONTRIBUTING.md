@@ -139,11 +139,16 @@ Tunables:
 - `SOAK_RECONNECT_EVERY` (default `10`): terminate the agent WebSocket and
   await reconnection every N cycles. Keep it at or below `SOAK_CYCLES` so the
   reconnect path is actually exercised.
+- `SOAK_RESOURCE_LOG`: optional JSONL path. The suite appends one resource
+  snapshot line after each batch and before/after each reconnect. Each line
+  carries only numeric resource counts and a timestamp, never URLs,
+  credentials, or environment dumps.
 
 The soak needs the `127.0.0.1` and `127.0.0.2` loopback addresses; it skips
 cleanly when the `127.0.0.2` alias is unavailable. It requires no external
 services. CI runs the scheduled-equivalent workload weekly and on demand via
-`.github/workflows/soak.yml` and uploads `/tmp/soak.log` on failure.
+`.github/workflows/soak.yml` and uploads `/tmp/soak.log` plus
+`/tmp/soak-resources.jsonl` on failure.
 
 ## Pull Request Process
 

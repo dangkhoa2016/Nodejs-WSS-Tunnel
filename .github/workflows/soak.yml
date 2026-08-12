@@ -29,6 +29,7 @@ jobs:
         env:
           SOAK_CYCLES: '500'
           SOAK_CONCURRENCY: '25'
+          SOAK_RESOURCE_LOG: /tmp/soak-resources.jsonl
       - name: Upload soak log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -36,4 +37,5 @@ jobs:
           name: soak-log
           path: |
             /tmp/soak.log
+            /tmp/soak-resources.jsonl
           if-no-files-found: error

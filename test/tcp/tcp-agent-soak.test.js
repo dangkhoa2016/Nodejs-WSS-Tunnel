@@ -11,14 +11,16 @@ process.env.TCP_CLIENT_ALLOWED_HOSTS = '127.0.0.2';
 
 const runSoak = process.env.RUN_SOAK === '1';
 
-function parsePositiveInt(value, fallback, name) {
+const MAX_CONCURRENT_STREAMS = 200;
+
+function parsePositiveInt(value, fallback, name, max = 10000) {
   const raw = value === undefined || value === '' ? String(fallback) : String(value);
   const n = Number(raw);
   if (!Number.isInteger(n) || n <= 0) {
     throw new Error(`${name} must be a positive integer, got "${raw}"`);
   }
-  if (n > 10000) {
-    throw new Error(`${name} too large (${n}); maximum is 10000`);
+  if (n > max) {
+    throw new Error(`${name} too large (${n}); maximum is ${max}`);
   }
   return n;
 }
@@ -26,7 +28,7 @@ function parsePositiveInt(value, fallback, name) {
 const PARAMS = runSoak
   ? {
       cycles: parsePositiveInt(process.env.SOAK_CYCLES, 100, 'SOAK_CYCLES'),
-      concurrency: parsePositiveInt(process.env.SOAK_CONCURRENCY, 20, 'SOAK_CONCURRENCY'),
+      concurrency: parsePositiveInt(process.env.SOAK_CONCURRENCY, 20, 'SOAK_CONCURRENCY', MAX_CONCURRENT_STREAMS),
       reconnectEvery: parsePositiveInt(process.env.SOAK_RECONNECT_EVERY, 10, 'SOAK_RECONNECT_EVERY'),
     }
   : { cycles: 0, concurrency: 0, reconnectEvery: 0 };
@@ -286,7 +288,7 @@ async function runBatch(env, ownedSockets, cycle) {
   assert.equal(ownedSockets.size, 0, 'all test-owned sockets must close');
   assert.equal(env.echo.sockets.size, 0, 'echo server must not retain sockets');
   const [agentStreams] = [...env.agentServer._agentStreams.values()];
-  assert.equal(agentStreams.size, 0, 'agent must not retain stream ids');
+  assert.equal(agentStreams?.size ?? 0, 0, 'agent must not retain stream ids');
 }
 
 async function forceAgentReconnect(env) {

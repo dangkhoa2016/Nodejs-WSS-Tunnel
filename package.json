@@ -12,6 +12,7 @@
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
     "audit:commits": "node scripts/audit-commits.js",
+    "test:protocol-negative": "NODE_ENV=test node --test test/tcp/protocol-negative.test.js",
     "build:client": "node serve/build.js",
     "check": "yarn lint && yarn test && yarn build:client"
   },

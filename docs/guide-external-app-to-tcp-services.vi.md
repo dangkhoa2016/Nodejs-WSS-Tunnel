@@ -1,196 +1,175 @@
-# Hướng dẫn: Ứng dụng bên ngoài kết nối vào dịch vụ TCP (Redis) qua tunnel
+# Kết nối ứng dụng bên ngoài tới dịch vụ TCP
 
-> 🌐 Language / Ngôn ngữ: [English](guide-external-app-to-tcp-services.md) | **Tiếng Việt**
+> Ngôn ngữ: [English](guide-external-app-to-tcp-services.md) | **Tiếng Việt**
 
-> Dùng hướng dẫn này khi app trên một máy cần truy cập Redis hoặc dịch vụ TCP
-> trên máy nằm sau Nodejs-WSS-Tunnel. Máy dịch vụ chạy tunnel client; máy ứng
-> dụng chạy agent hoặc sử dụng chế độ trực tiếp.
+Dùng hướng dẫn này để chia sẻ Redis, PostgreSQL hoặc dịch vụ TCP khác từ một
+máy dịch vụ (Computer A) cho một hoặc nhiều máy ứng dụng (B, C, ...).
 
 ## Chọn chế độ trực tiếp hoặc agent
-Dùng chế độ trực tiếp khi server có thể expose và firewall đúng cổng dịch vụ. Dùng agent khi chỉ cổng HTTP/WebSocket được public hoặc app phải dùng loopback.
 
-Nếu một máy dịch vụ được chia sẻ cho hai hoặc nhiều máy ứng dụng, hãy xem
-[hướng dẫn dịch vụ TCP đa máy](guide-multi-host-tcp-services.vi.md).
-
-## 1. Tổng quan và kiến trúc
-
-Tunnel gồm ba thành phần:
-
-- **Tunnel client** (`docs/setup-tunnel-client.sh`) — chạy trên máy chứa dịch
-  vụ (Redis). Nó kết nối tới server qua WebSocket `/tunnel`.
-- **Server** (`Nodejs-WSS-Tunnel`) — relay luồng dữ liệu giữa client và các
-  agent. Trong ví dụ này server expose một cổng HTTP/WebSocket có thể cấu hình
-  (`PORT`, mặc định `7860`).
-- **TCP agent** (`docs/setup-tcp-agent.sh`) — chạy trên máy ngoài / máy chạy
-  ứng dụng. Nó lắng nghe trên một cổng local và bắc cầu tới server qua
-  WebSocket `/tcp`.
-
-```
-Máy ngoài (app / redis-cli)
-        |  TCP (local)   redis://127.0.0.1:6379
-        v
-   tcp-agent.js  -- WS /tcp -->  Server :7860  -- WS /tunnel -->  client.js
-   (chạy trên máy ngoài)            (github.dev)              (máy chạy Redis)
-                                                                      |
-                                                                TCP (local)
-                                                                      v
-                                                          Redis 127.0.0.1:6379
-```
-
-Ứng dụng chỉ cần kết nối `redis://127.0.0.1:6379` trên máy ngoài. Không cần mở
-cổng nào trên server.
-
-> **Khớp cổng:** `AGENT_PORTS` của agent phải trùng cổng của dịch vụ local trên
-> máy chạy dịch vụ (cả hai đều `6379` ở đây) — tunnel client dial đúng cổng mà
-> agent expose. Host mà client dial là `TCP_TUNNEL_HOST` của server (mặc định
-> `127.0.0.1`); client phải cho phép host đó trong `TCP_CLIENT_ALLOWED_HOSTS`
-> (mặc định `127.0.0.1`).
-
-## 2. Thuật ngữ
-
-| Thuật ngữ | Là gì | Chạy ở đâu |
+| Nhu cầu | Chế độ trực tiếp | Chế độ agent |
 |---|---|---|
-| Tunnel client | Điểm cuối WebSocket `/tunnel` để kết nối tới dịch vụ local | Máy chứa dịch vụ (Redis) |
-| Server | Trung tâm relay (`Nodejs-WSS-Tunnel`) | Máy chủ công khai |
-| TCP agent | Điểm cuối WebSocket `/tcp` để expose một cổng local | Máy ngoài / máy chạy ứng dụng |
+| Ứng dụng kết nối tới | Cổng TCP public của server | Cổng loopback của agent |
+| Cần thêm cổng TCP public | Có | Không |
+| Phù hợp | VPS/mạng tự quản lý | PaaS và nhiều máy từ xa |
+| Truyền tải bên ngoài | TCP thô | TCP local, sau đó WSS |
 
-## 3. Chuẩn bị
+Chế độ trực tiếp đơn giản khi server có thể expose và firewall đúng cổng dịch
+vụ. Agent phù hợp với PaaS và cung cấp listener `127.0.0.1` riêng cho từng B/C.
 
-- Cả hai máy: Node.js >= 18 và `curl`.
-- Máy ngoài cần thêm: `npm`.
-- Thông tin xác thực server: Mặc định dùng `TUNNEL_USERNAME` / `TUNNEL_PASSWORD`. Nếu quản trị viên server cấu hình riêng `TCP_AGENT_USERNAME` / `TCP_AGENT_PASSWORD`, hãy dùng cặp tài khoản đó cho TCP agent.
+## Kiến trúc
 
-### 3.1 Lấy giá trị thật ở đâu
+```text
+Computer B ── 127.0.0.1:6379/5432 ── agent ─┐
+Computer C ── 127.0.0.1:6379/5432 ── agent ─┼─ WSS /tcp ─ server
+                                             └─ WSS /tunnel ─ Computer A
+                                                                ├─ Redis 6379
+                                                                └─ PostgreSQL 5432
+```
 
-| Giá trị | Nguồn |
+A chạy một tunnel client. Mỗi máy ứng dụng chạy agent độc lập. B và C có thể
+dùng cùng cổng local vì chúng là các máy khác nhau.
+
+## 1. Cấu hình server cho agent mode
+
+```env
+INSTALL_UUID=<uuid-on-dinh>
+TUNNEL_USERNAME=<tunnel-user>
+TUNNEL_PASSWORD=<tunnel-secret-dai>
+MAX_TUNNEL_CLIENTS=1
+
+TCP_AGENT_ALLOWED_PORTS=6379,5432
+TCP_AGENT_USERNAME=<agent-user>
+TCP_AGENT_PASSWORD=<agent-secret-dai>
+TCP_AGENT_REQUIRE_TLS=true
+TCP_AGENT_MAX_STREAMS_PER_AGENT=100
+TCP_MAX_CONNECTIONS_PER_PORT=40
+```
+
+`MAX_TUNNEL_CLIENTS=1` là đủ vì chỉ A kết nối `/tunnel`. Server chấp nhận nhiều
+agent `/tcp`. Nếu reverse proxy kết thúc TLS, chỉ thêm IP/CIDR proxy trực tiếp
+vào `TCP_AGENT_TRUSTED_PROXIES`.
+
+Build bundle trước khi chạy production:
+
+```bash
+node serve/build.js
+npm run prod
+```
+
+## 2. Cài Computer A (máy dịch vụ)
+
+Không cần checkout mã nguồn. Chỉ tải script từ release tag bất biến và đáng tin
+cậy (hoặc nhận đúng file này từ quản trị viên):
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-service-host.sh' -o setup-service-host.sh
+chmod 750 setup-service-host.sh
+
+export SERVER_HOST='tunnel.example.com'
+export INSTALL_UUID='<uuid-on-dinh>'
+export TUNNEL_USERNAME='<tunnel-user>'
+export TUNNEL_PASSWORD='<tunnel-secret-dai>'
+./setup-service-host.sh
+```
+
+Giữ Redis và PostgreSQL trên loopback. Thay `<release-tag>` bằng phiên bản bất
+biến đã duyệt; không cài script production từ nhánh `main` luôn thay đổi.
+
+## 3. Cài Computer B (máy ứng dụng)
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-application-host.sh' -o setup-application-host.sh
+chmod 750 setup-application-host.sh
+
+export SERVER_HOST='tunnel.example.com'
+export INSTALL_UUID='<uuid-on-dinh>'
+export AGENT_USERNAME='<agent-user>'
+export AGENT_PASSWORD='<agent-secret-dai>'
+export AGENT_PORTS='6379,5432'
+./setup-application-host.sh
+```
+
+Kiểm tra hai dịch vụ qua loopback:
+
+```bash
+REDISCLI_AUTH='<redis-password>' redis-cli --user '<redis-user>' -h 127.0.0.1 -p 6379 ping
+PGPASSWORD='<password>' psql -h 127.0.0.1 -p 5432 -U '<postgres-role>' -d '<database>' -c 'SELECT 1'
+```
+
+## 4. Thêm Computer C và các máy sau
+
+Tải cùng phiên bản `setup-application-host.sh` đã ghim và lặp lại mục 3 trên C,
+D và mọi máy tiêu thụ. Tất cả dùng cùng `SERVER_HOST` và `INSTALL_UUID`. Server
+hiện có một cặp credential transport của agent, nên các agent dùng chung cặp đó
+cho tới khi mô hình xác thực được mở rộng.
+
+Ứng dụng dùng URL loopback:
+
+```text
+redis://<redis-user>:<redis-password>@127.0.0.1:6379
+postgresql://<postgres-role>:<password>@127.0.0.1:5432/<database>
+```
+
+## 5. Giới hạn khi có nhiều agent
+
+- `TCP_AGENT_MAX_STREAMS_PER_AGENT` áp dụng độc lập cho từng agent.
+- `TCP_MAX_CONNECTIONS_PER_PORT` là giới hạn tổng mọi agent trên cổng đó.
+- Giới hạn kết nối Redis/PostgreSQL vẫn áp dụng sau giới hạn tunnel. Hãy định cỡ
+  mọi lớp dựa trên tổng tải đo được.
+
+## 6. Phân quyền và thu hồi từng người dùng
+
+Credential transport hiện chưa phân biệt B với C. Tạo Redis ACL user và
+PostgreSQL role riêng cho từng người dùng, chỉ cấp command, key, schema, table
+và thao tác cần thiết.
+
+Để thu hồi B mà không làm gián đoạn C:
+
+1. vô hiệu hóa Redis ACL user và PostgreSQL role của B;
+2. dừng agent B bằng `kill $(cat ~/.tcp-agent/agent.pid)`;
+3. xóa `~/.tcp-agent` nếu B bị loại bỏ.
+
+Nếu secret agent dùng chung bị lộ, đổi nó trên server và mọi agent được phép.
+Phiên bản hiện tại chưa hỗ trợ thu hồi secret transport riêng từng agent.
+
+## 7. Chế độ trực tiếp
+
+Chỉ dùng direct mode khi nền tảng forward đúng cổng TCP:
+
+```env
+TCP_TUNNEL_PORTS=6379,5432
+TCP_TUNNEL_BIND_HOST=0.0.0.0
+TCP_TUNNEL_ALLOWED_IPS=203.0.113.10,198.51.100.20
+```
+
+Kiểm tra Redis từ địa chỉ được phép:
+
+```bash
+REDISCLI_AUTH='<redis-password>' redis-cli -h <server-host> -p 6379 ping
+```
+
+Listener direct là TCP thô nếu không có TCP TLS proxy riêng. Luôn giới hạn bằng
+firewall và `TCP_TUNNEL_ALLOWED_IPS`. Không có port remapping: dịch vụ trên A
+phải listen đúng cổng được yêu cầu.
+
+## 8. Checklist production
+
+- [ ] Mọi máy dùng cùng hostname và UUID đã ghim.
+- [ ] `/tunnel` và `/tcp` dùng WSS với chứng chỉ hợp lệ.
+- [ ] Mọi agent giữ `AGENT_BIND_HOST=127.0.0.1`.
+- [ ] Redis/PostgreSQL giữ xác thực và danh tính riêng theo người dùng.
+- [ ] Giới hạn tổng và mỗi agent đủ cho tải dự kiến.
+- [ ] Đã thử xoay credential và thu hồi user database.
+
+## 9. Khắc phục sự cố
+
+| Triệu chứng | Kiểm tra |
 |---|---|
-| `<server-host>` | Người quản trị server tunnel của bạn |
-| `<server-install-uuid>` | Trường `installUuid=...` trong dòng log startup `[standard] [ws] startup ...` của server; hãy đặt cố định trong `.env` của server (`INSTALL_UUID=...`) để URL artifact ổn định |
-| `<server-tunnel-username>` / `<server-tunnel-password>` | `TUNNEL_USERNAME` / `TUNNEL_PASSWORD` của server |
-| `<agent-username>` / `<agent-password>` | `TCP_AGENT_USERNAME` / `TCP_AGENT_PASSWORD` của server (tự động fallback sang `TUNNEL_USERNAME` / `TUNNEL_PASSWORD` khi không đặt) |
-| `<redis-password>` | `requirepass` của Redis chạy trên máy tunnel client |
-
-> Nếu `INSTALL_UUID` chưa được đặt trong `.env` của server, server sẽ sinh UUID
-> mới mỗi lần khởi động lại, làm đổi mọi URL artifact.
-
-## 4. Phần 1 — Máy chứa dịch vụ (Redis)
-
-Trên máy chạy Redis:
-
-1. Copy `docs/setup-tunnel-client.sh` sang máy đó.
-2. Điền khối CONFIG: `SERVER_HOST`, `INSTALL_UUID`, `TUNNEL_USERNAME`,
-   `TUNNEL_PASSWORD`. `TARGET_ORIGIN` là đích HTTP tunnel (không dùng cho
-   đường TCP/Redis).
-3. Chạy `bash setup-tunnel-client.sh`.
-
-Kiểm tra:
-
-```bash
-tail -f ~/.tunnel-client/client.log
-# tìm dòng: "[standard] [client] connected"
-```
-
-Client tự cài vào `~/.tunnel-client/`. Dừng bằng
-`kill $(cat ~/.tunnel-client/client.pid)`.
-
-## 5. Phần 2 — Máy ngoài / máy chạy ứng dụng
-
-Trên máy ngoài:
-
-1. Copy `docs/setup-tcp-agent.sh` sang máy đó.
-2. Điền khối CONFIG: `SERVER_HOST`, `INSTALL_UUID`, `REDIS_PASSWORD`.
-   Thông tin xác thực agent sẽ được hỏi nếu bạn chưa đặt `AGENT_USERNAME` /
-   `AGENT_PASSWORD` (hoặc `TUNNEL_USERNAME` / `TUNNEL_PASSWORD`) trước.
-3. Chạy `bash setup-tcp-agent.sh`.
-
-Khi thành công script in ra `Agent connected to tunnel server.` (log agent hiện
-`[standard] [agent] connected`) và agent lắng nghe tại `127.0.0.1:6379`. Kiểm tra:
-
-```bash
-redis-cli -h 127.0.0.1 -p 6379 -a <redis-password> ping
-# PONG
-```
-
-Log: `$HOME/.redis-agent/agent.log`. Dừng: `kill $(cat $HOME/.redis-agent/agent.pid)`.
-
-## 6. Cấu hình ứng dụng
-
-URL đầy đủ (kèm password):
-
-```
-redis://:<redis-password>@127.0.0.1:6379
-```
-
-**Rails** — `config/cache_store.rb`:
-
-```ruby
-config.cache_store = :redis_cache_store, {
-  url: "redis://:<redis-password>@127.0.0.1:6379",
-  connect_timeout: 5,
-  read_timeout: 5,
-  write_timeout: 5
-}
-```
-
-**Sidekiq** — `config/sidekiq.yml`:
-
-```yaml
-:concurrency: 5
-:redis:
-  url: redis://:<redis-password>@127.0.0.1:6379
-```
-
-**Python:**
-
-```python
-import redis
-r = redis.Redis(host="127.0.0.1", port=6379, password="<redis-password>")
-print(r.ping())  # True
-```
-
-**Node.js:**
-
-```js
-const redis = require('redis');
-const client = redis.createClient({ url: 'redis://:<redis-password>@127.0.0.1:6379' });
-await client.connect();
-console.log(await client.ping()); // PONG
-```
-
-## 7. Kết nối trực tiếp (khi server mở cổng TCP)
-
-Chỉ dùng được khi CẢ HAI điều kiện đúng:
-
-1. Server bind TCP ra mạng: `TCP_TUNNEL_BIND_HOST=0.0.0.0`
-   (hiện mặc định là `127.0.0.1`).
-2. Nền tảng hosting forward cổng TCP đó ra công khai (github.dev hiện chưa
-   forward cổng thứ hai).
-
-Khi đã mở, ứng dụng có thể kết nối thẳng tới edge của server:
-Chế độ trực tiếp là TCP thô nếu không có TCP TLS proxy riêng. Hãy giới hạn bằng firewall và `TCP_TUNNEL_ALLOWED_IPS`.
-
-```bash
-redis-cli -h <server-host> -p 6379 -a <redis-password> ping
-# PONG
-```
-
-Nếu không, hãy dùng **Phần 2** (TCP agent).
-
-## 8. Khắc phục sự cố
-
-| Triệu chứng | Nguyên nhân / Xử lý |
-|---|---|
-| Log agent `[standard] [agent] auth_failed` / log server `[standard] [auth] agent_ws_reject ... reason=invalid_credentials` | Sai thông tin xác thực. Mặc định agent dùng `TUNNEL_USERNAME` / `TUNNEL_PASSWORD`. Nếu server cài `TCP_AGENT_USERNAME` / `TCP_AGENT_PASSWORD` riêng, hãy đảm bảo điền đúng cặp credential của agent (mục 3). |
-| Log server `tcp reject reason=no_client` | Chưa có tunnel client kết nối qua `/tunnel`. Chạy Phần 1 trên máy Redis; kiểm tra `tail -f ~/.tunnel-client/client.log` có dòng `[standard] [client] connected`. |
-| `redis-cli ping` báo `NOAUTH` | Thiếu password: thêm `-a <redis-password>`. |
-| `connect ECONNREFUSED` trên `127.0.0.1:6379` | Agent chưa chạy. Chạy lại Phần 2. |
-| Redis báo `READONLY` | Tunnel đã tới replica hoặc Redis chỉ đọc; hãy kết nối primary có thể ghi. |
-| Request timeout khi tải cao | Kiểm tra `TCP_MAX_CONNECTIONS_PER_PORT`, `TCP_AGENT_MAX_STREAMS_PER_AGENT`, log và năng lực dịch vụ. |
-
-## 9. Lưu ý bảo mật
-
-- Luôn dùng `wss://` (TLS). Tunnel vận chuyển TCP plaintext giữa client và
-  agent qua server.
-- Giữ `AGENT_BIND_HOST=127.0.0.1` — không expose agent ra mạng.
-- Giữ `requirepass` của Redis mạnh; không chia sẻ công khai.
-- Số tunnel client được kết nối tới `/tunnel` bị giới hạn bởi `MAX_TUNNEL_CLIENTS` (mặc định 1).
+| B chạy nhưng C lỗi | Hostname/UUID, credential và log agent C |
+| Agent nhận 401 | Username và password của agent |
+| Agent nhận 426 | WSS và cấu hình trusted proxy |
+| Báo đạt giới hạn | Giới hạn tổng mỗi cổng và stream mỗi agent |
+| Redis trả `NOAUTH` | Redis ACL identity và password |
+| Redis trả `READONLY` | Dùng Redis primary có thể ghi |
+| PostgreSQL từ chối login | PostgreSQL role, password, `pg_hba.conf`, grants |

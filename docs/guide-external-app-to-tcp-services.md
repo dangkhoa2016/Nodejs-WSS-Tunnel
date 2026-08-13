@@ -1,197 +1,176 @@
-# Guide: Connecting an External App to TCP Services (Redis) through the Tunnel
+# Connect External Applications to TCP Services
 
-> 🌐 Language / Ngôn ngữ: **English** | [Tiếng Việt](guide-external-app-to-tcp-services.vi.md)
+> Language: **English** | [Tiếng Việt](guide-external-app-to-tcp-services.vi.md)
 
-> Use this guide when an app on one machine must reach Redis or another TCP
-> service on a machine behind Nodejs-WSS-Tunnel. The service host runs the
-> tunnel client; the application host either runs an agent or uses direct mode.
+Use this guide to share Redis, PostgreSQL, or another TCP service from one
+service host (Computer A) with one or many application hosts (B, C, ...).
 
 ## Choose direct or agent mode
 
-Use direct mode when the server can expose and firewall the exact service port. Use agent mode when only the HTTP/WebSocket port is public or the app must use loopback.
-
-For one service host shared with two or more application hosts, follow the
-[multi-host TCP services guide](guide-multi-host-tcp-services.md).
-
-## 1. Overview and topology
-
-The tunnel has three moving parts:
-
-- **Tunnel client** (`docs/setup-tunnel-client.sh`) — runs on the machine that
-  hosts the service (Redis). It dials the server over WebSocket `/tunnel`.
-- **Server** (`Nodejs-WSS-Tunnel`) — relays streams between the client and
-  agents. In this agent-mode example it exposes one configurable HTTP/WebSocket
-  port (`PORT`, default `7860`).
-- **TCP agent** (`docs/setup-tcp-agent.sh`) — runs on the external/app-host
-  machine. It listens on a local port and bridges to the server over WebSocket
-  `/tcp`.
-
-```
-External machine (app / redis-cli)
-        |  TCP (local)   redis://127.0.0.1:6379
-        v
-   tcp-agent.js  -- WS /tcp -->  Server :7860  -- WS /tunnel -->  client.js
-   (runs on external box)           (github.dev)               (Redis box)
-                                                                      |
-                                                                TCP (local)
-                                                                      v
-                                                          Redis 127.0.0.1:6379
-```
-
-The app just connects to `redis://127.0.0.1:6379` on the external machine. No
-port needs to be opened on the server.
-
-> **Port matching:** the agent's `AGENT_PORTS` must match the local service's
-> port on the service machine (both `6379` here) — the tunnel client dials the
-> same port the agent exposes. The host it dials is the server's
-> `TCP_TUNNEL_HOST` (default `127.0.0.1`); the client must allow it via
-> `TCP_CLIENT_ALLOWED_HOSTS` (default `127.0.0.1`).
-
-## 2. Terminology
-
-| Term | What it is | Runs on |
+| Requirement | Direct mode | Agent mode |
 |---|---|---|
-| Tunnel client | WebSocket `/tunnel` endpoint that dials local services | The machine with the service (Redis) |
-| Server | Relay hub (`Nodejs-WSS-Tunnel`) | Public host |
-| TCP agent | WebSocket `/tcp` endpoint that exposes a local port | External / app machine |
+| Application connects to | Public server TCP port | Agent loopback port |
+| Extra public TCP port | Required | Not required |
+| Recommended for | Controlled VPS/network | PaaS and multiple remote hosts |
+| External transport | Raw TCP | Local TCP, then WSS |
 
-## 3. Prerequisites
+Direct mode is simpler when the server can expose and firewall the exact
+service port. Agent mode is safer for PaaS and lets every B/C host receive its
+own `127.0.0.1` listeners through the server's existing WebSocket port.
 
-- Both machines: Node.js >= 18 and `curl`.
-- External machine additionally: `npm`.
-- Server credentials: `TUNNEL_USERNAME` / `TUNNEL_PASSWORD` by default. If the server administrator configured custom `TCP_AGENT_USERNAME` / `TCP_AGENT_PASSWORD` values, use those for the TCP agent.
+## Architecture
 
-### 3.1 Where to get the real values
+```text
+Computer B ── 127.0.0.1:6379/5432 ── agent ─┐
+Computer C ── 127.0.0.1:6379/5432 ── agent ─┼─ WSS /tcp ─ server
+                                             └─ WSS /tunnel ─ Computer A
+                                                                ├─ Redis 6379
+                                                                └─ PostgreSQL 5432
+```
 
-| Value | Source |
+A runs one tunnel client. Each application host runs an independent agent. B
+and C can use the same local ports because they are different machines.
+
+## 1. Configure the server for agent mode
+
+```env
+INSTALL_UUID=<stable-uuid>
+TUNNEL_USERNAME=<tunnel-user>
+TUNNEL_PASSWORD=<long-tunnel-secret>
+MAX_TUNNEL_CLIENTS=1
+
+TCP_AGENT_ALLOWED_PORTS=6379,5432
+TCP_AGENT_USERNAME=<agent-user>
+TCP_AGENT_PASSWORD=<long-agent-secret>
+TCP_AGENT_REQUIRE_TLS=true
+TCP_AGENT_MAX_STREAMS_PER_AGENT=100
+TCP_MAX_CONNECTIONS_PER_PORT=40
+```
+
+`MAX_TUNNEL_CLIENTS=1` is enough because only A connects to `/tunnel`. The
+server accepts multiple `/tcp` agents. Behind a TLS-terminating proxy, configure
+`TCP_AGENT_TRUSTED_PROXIES` with only the immediate proxy IP/CIDR.
+
+Build bundles before production startup:
+
+```bash
+node serve/build.js
+npm run prod
+```
+
+## 2. Install Computer A (service host)
+
+No source checkout is required. Download only the script from a trusted,
+immutable release tag (or receive that file from the administrator):
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-service-host.sh' -o setup-service-host.sh
+chmod 750 setup-service-host.sh
+
+export SERVER_HOST='tunnel.example.com'
+export INSTALL_UUID='<stable-uuid>'
+export TUNNEL_USERNAME='<tunnel-user>'
+export TUNNEL_PASSWORD='<long-tunnel-secret>'
+./setup-service-host.sh
+```
+
+Keep Redis and PostgreSQL on loopback. Replace `<release-tag>` with an approved
+immutable version; do not install production scripts from a moving `main`.
+
+## 3. Install Computer B (application host)
+
+```bash
+curl -fsSL 'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-application-host.sh' -o setup-application-host.sh
+chmod 750 setup-application-host.sh
+
+export SERVER_HOST='tunnel.example.com'
+export INSTALL_UUID='<stable-uuid>'
+export AGENT_USERNAME='<agent-user>'
+export AGENT_PASSWORD='<long-agent-secret>'
+export AGENT_PORTS='6379,5432'
+./setup-application-host.sh
+```
+
+Verify both services locally:
+
+```bash
+REDISCLI_AUTH='<redis-password>' redis-cli --user '<redis-user>' -h 127.0.0.1 -p 6379 ping
+PGPASSWORD='<password>' psql -h 127.0.0.1 -p 5432 -U '<postgres-role>' -d '<database>' -c 'SELECT 1'
+```
+
+## 4. Add Computer C and later hosts
+
+Download the same pinned `setup-application-host.sh` version and repeat section
+3 on C, D, and every consumer. All hosts use the same `SERVER_HOST` and
+`INSTALL_UUID`. The current server exposes one agent transport credential pair,
+so agents share it unless authentication is extended.
+
+Applications use loopback URLs:
+
+```text
+redis://<redis-user>:<redis-password>@127.0.0.1:6379
+postgresql://<postgres-role>:<password>@127.0.0.1:5432/<database>
+```
+
+## 5. Limits across multiple agents
+
+- `TCP_AGENT_MAX_STREAMS_PER_AGENT` applies independently to each agent.
+- `TCP_MAX_CONNECTIONS_PER_PORT` is aggregate across all agents for that port.
+- Redis/PostgreSQL connection limits apply after tunnel limits. Size every
+  layer from measured aggregate traffic.
+
+## 6. Per-consumer authorization and revocation
+
+Transport credentials cannot currently identify B separately from C. Create a
+Redis ACL user and PostgreSQL role for each consumer, granting only required
+commands, keys, schemas, tables, and operations.
+
+To revoke B without interrupting C:
+
+1. disable B's Redis ACL user and PostgreSQL role;
+2. stop B's agent with `kill $(cat ~/.tcp-agent/agent.pid)`;
+3. remove `~/.tcp-agent` if B is decommissioned.
+
+If the shared agent secret leaks, rotate it on the server and every authorized
+agent. Per-agent transport-secret revocation is not supported yet.
+
+## 7. Direct mode
+
+Use direct mode only when the platform forwards the exact TCP port:
+
+```env
+TCP_TUNNEL_PORTS=6379,5432
+TCP_TUNNEL_BIND_HOST=0.0.0.0
+TCP_TUNNEL_ALLOWED_IPS=203.0.113.10,198.51.100.20
+```
+
+Verify Redis from an allowed address:
+
+```bash
+REDISCLI_AUTH='<redis-password>' redis-cli -h <server-host> -p 6379 ping
+```
+
+Direct listeners are raw TCP unless you deploy a separate TCP TLS proxy. Always
+restrict them with a firewall and `TCP_TUNNEL_ALLOWED_IPS`. There is no port
+remapping: the service on A must listen on the same requested port.
+
+## 8. Production checklist
+
+- [ ] All hosts use the same hostname and pinned UUID.
+- [ ] `/tunnel` and `/tcp` use WSS with a valid certificate.
+- [ ] Agents keep `AGENT_BIND_HOST=127.0.0.1`.
+- [ ] Redis/PostgreSQL retain authentication and per-consumer identities.
+- [ ] Aggregate and per-agent limits cover expected concurrency.
+- [ ] Credential rotation and database-user revocation are tested.
+
+## 9. Troubleshooting
+
+| Symptom | Check |
 |---|---|
-| `<server-host>` | Your tunnel server administrator |
-| `<server-install-uuid>` | Field `installUuid=...` in the server's startup log line `[standard] [ws] startup ...`; pin it in the server `.env` (`INSTALL_UUID=...`) so artifact URLs stay stable |
-| `<server-tunnel-username>` / `<server-tunnel-password>` | Server `TUNNEL_USERNAME` / `TUNNEL_PASSWORD` |
-| `<agent-username>` / `<agent-password>` | Server `TCP_AGENT_USERNAME` / `TCP_AGENT_PASSWORD` (falls back to `TUNNEL_USERNAME` / `TUNNEL_PASSWORD` when unset) |
-| `<redis-password>` | `requirepass` of the Redis running on the tunnel-client machine |
-
-> If `INSTALL_UUID` is not set in the server `.env`, the server generates a new
-> UUID on every restart, which changes every artifact URL.
-
-## 4. Part 1 — Machine that hosts the service (Redis)
-
-On the machine that runs Redis:
-
-1. Copy `docs/setup-tunnel-client.sh` there.
-2. Fill in the CONFIG block: `SERVER_HOST`, `INSTALL_UUID`, `TUNNEL_USERNAME`,
-   `TUNNEL_PASSWORD`. `TARGET_ORIGIN` is the HTTP tunnel target (unused by the
-   TCP/Redis path).
-3. Run `bash setup-tunnel-client.sh`.
-
-Verify:
-
-```bash
-tail -f ~/.tunnel-client/client.log
-# look for: "[standard] [client] connected"
-```
-
-The client installs itself into `~/.tunnel-client/`. Stop it with
-`kill $(cat ~/.tunnel-client/client.pid)`.
-
-## 5. Part 2 — External / app-host machine
-
-On the external machine:
-
-1. Copy `docs/setup-tcp-agent.sh` there.
-2. Fill in the CONFIG block: `SERVER_HOST`, `INSTALL_UUID`, `REDIS_PASSWORD`.
-   Agent credentials are prompted unless you set `AGENT_USERNAME` /
-   `AGENT_PASSWORD` (or `TUNNEL_USERNAME` / `TUNNEL_PASSWORD`) first.
-3. Run `bash setup-tcp-agent.sh`.
-
-On success the script prints `Agent connected to tunnel server.` (the agent log
-shows `[standard] [agent] connected`) and the agent listens on `127.0.0.1:6379`. Verify:
-
-```bash
-redis-cli -h 127.0.0.1 -p 6379 -a <redis-password> ping
-# PONG
-```
-
-Logs: `$HOME/.redis-agent/agent.log`. Stop: `kill $(cat $HOME/.redis-agent/agent.pid)`.
-
-## 6. App configuration
-
-Full URL (with password):
-
-```
-redis://:<redis-password>@127.0.0.1:6379
-```
-
-**Rails** — `config/cache_store.rb`:
-
-```ruby
-config.cache_store = :redis_cache_store, {
-  url: "redis://:<redis-password>@127.0.0.1:6379",
-  connect_timeout: 5,
-  read_timeout: 5,
-  write_timeout: 5
-}
-```
-
-**Sidekiq** — `config/sidekiq.yml`:
-
-```yaml
-:concurrency: 5
-:redis:
-  url: redis://:<redis-password>@127.0.0.1:6379
-```
-
-**Python:**
-
-```python
-import redis
-r = redis.Redis(host="127.0.0.1", port=6379, password="<redis-password>")
-print(r.ping())  # True
-```
-
-**Node.js:**
-
-```js
-const redis = require('redis');
-const client = redis.createClient({ url: 'redis://:<redis-password>@127.0.0.1:6379' });
-await client.connect();
-console.log(await client.ping()); // PONG
-```
-
-## 7. Direct mode (when the server exposes a TCP port)
-
-This works only if BOTH hold:
-
-1. The server binds TCP on the network: `TCP_TUNNEL_BIND_HOST=0.0.0.0`
-   (it currently defaults to `127.0.0.1`).
-2. The hosting platform forwards that TCP port publicly (github.dev does not
-   currently forward a second port).
-
-Only then can the app connect straight to the server edge:
-Direct mode is raw TCP unless a separate TCP TLS proxy is deployed. Restrict it with a firewall and `TCP_TUNNEL_ALLOWED_IPS`.
-
-```bash
-redis-cli -h <server-host> -p 6379 -a <redis-password> ping
-# PONG
-```
-
-Otherwise prefer **Part 2** (the TCP agent).
-
-## 8. Troubleshooting
-
-| Symptom | Cause / Fix |
-|---|---|
-| Agent log `[standard] [agent] auth_failed` / server log `[standard] [auth] agent_ws_reject ... reason=invalid_credentials` | Wrong credentials. By default the agent uses `TUNNEL_USERNAME` / `TUNNEL_PASSWORD`. If the server sets `TCP_AGENT_USERNAME` / `TCP_AGENT_PASSWORD`, ensure you provide those matching agent credentials (section 3). |
-| Server log `tcp reject reason=no_client` | No tunnel client is connected over `/tunnel`. Run Part 1 on the Redis machine; check `tail -f ~/.tunnel-client/client.log` for `[standard] [client] connected`. |
-| `redis-cli ping` says `NOAUTH` | Missing password: add `-a <redis-password>`. |
-| `connect ECONNREFUSED` on `127.0.0.1:6379` | The agent is not running. Re-run Part 2. |
-| Redis says `READONLY` | The tunnel reached a replica or read-only Redis node; connect to the writable primary. |
-| Requests time out under load | Check `TCP_MAX_CONNECTIONS_PER_PORT`, `TCP_AGENT_MAX_STREAMS_PER_AGENT`, logs, and service capacity. |
-
-## 9. Security notes
-
-- Always use `wss://` (TLS). The tunnel carries plaintext TCP between the
-  client and the agent through the server.
-- Keep `AGENT_BIND_HOST=127.0.0.1` — do not expose the agent to the network.
-- Keep a strong Redis `requirepass`; never share it publicly.
-- The number of tunnel clients that may connect to `/tunnel` is limited by `MAX_TUNNEL_CLIENTS` (default 1).
+| B works but C fails | C hostname/UUID, agent credentials, and agent log |
+| Agent receives 401 | Agent username and password |
+| Agent receives 426 | WSS and trusted-proxy configuration |
+| Connection limit reached | Aggregate per-port versus per-agent stream limit |
+| Redis returns `NOAUTH` | Redis ACL identity and password |
+| Redis returns `READONLY` | Use the writable Redis primary |
+| PostgreSQL rejects login | PostgreSQL role, password, `pg_hba.conf`, grants |

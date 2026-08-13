@@ -52,16 +52,26 @@ npm run prod
 
 ## 2. Cài Computer A (máy dịch vụ)
 
-Redis và PostgreSQL nên listen trên loopback. Tải hoặc clone repository rồi chạy:
+Redis và PostgreSQL nên listen trên loopback. Computer A **không cần** clone
+repository: chỉ tải script service-host từ release tag cố định và đáng tin cậy
+(hoặc nhận đúng một file này từ quản trị viên), kiểm tra nội dung rồi chạy:
 
 ```bash
+curl -fsSL \
+  'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-service-host.sh' \
+  -o setup-service-host.sh
+chmod 750 setup-service-host.sh
+
 export SERVER_HOST='tunnel.example.com'
 export INSTALL_UUID='<uuid-on-dinh>'
 export TUNNEL_USERNAME='<tunnel-user>'
 export TUNNEL_PASSWORD='<tunnel-secret-dai>'
 
-./scripts/setup-service-host.sh
+./setup-service-host.sh
 ```
+
+Thay `<release-tag>` bằng phiên bản bất biến được quản trị viên server phê
+duyệt. Không cài script production trực tiếp từ nhánh `main` luôn thay đổi.
 
 Kiểm tra client:
 
@@ -75,13 +85,18 @@ cả hai cổng vì server yêu cầu đúng cổng được phép trên `127.0.
 ## 3. Cài Computer B
 
 ```bash
+curl -fsSL \
+  'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-application-host.sh' \
+  -o setup-application-host.sh
+chmod 750 setup-application-host.sh
+
 export SERVER_HOST='tunnel.example.com'
 export INSTALL_UUID='<uuid-on-dinh>'
 export AGENT_USERNAME='<agent-user>'
 export AGENT_PASSWORD='<agent-secret-dai>'
 export AGENT_PORTS='6379,5432'
 
-./scripts/setup-application-host.sh
+./setup-application-host.sh
 ```
 
 Ứng dụng trên B chỉ kết nối loopback:
@@ -93,8 +108,9 @@ postgresql://<postgres-role>:<password>@127.0.0.1:5432/<database>
 
 ## 4. Cài Computer C và các máy khác
 
-Chạy cùng `scripts/setup-application-host.sh` trên C, D và mỗi máy tiêu thụ mới.
-Dùng cùng hostname và UUID của server. Server hiện chỉ có một cặp credential
+Tải cùng phiên bản `setup-application-host.sh` đã ghim trên C, D và mỗi máy tiêu
+thụ mới, rồi chạy cùng lệnh. Dùng cùng hostname và UUID của server. Server hiện
+chỉ có một cặp credential
 transport, nên mọi agent dùng chung `AGENT_USERNAME`/`AGENT_PASSWORD` cho tới
 khi mô hình xác thực được mở rộng.
 

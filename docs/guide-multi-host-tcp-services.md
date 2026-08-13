@@ -52,17 +52,26 @@ npm run prod
 
 ## 2. Set up Computer A (service host)
 
-Redis and PostgreSQL should listen on loopback. Download or clone the repository,
-then run:
+Redis and PostgreSQL should listen on loopback. Computer A does **not** need the
+repository: download only the service-host script from a trusted, pinned release
+tag (or copy that single file from the administrator), inspect it, then run it:
 
 ```bash
+curl -fsSL \
+  'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-service-host.sh' \
+  -o setup-service-host.sh
+chmod 750 setup-service-host.sh
+
 export SERVER_HOST='tunnel.example.com'
 export INSTALL_UUID='<stable-uuid>'
 export TUNNEL_USERNAME='<tunnel-user>'
 export TUNNEL_PASSWORD='<long-tunnel-secret>'
 
-./scripts/setup-service-host.sh
+./setup-service-host.sh
 ```
+
+Replace `<release-tag>` with an immutable version approved by the server
+administrator. Do not install production scripts from a moving `main` branch.
 
 Verify the client:
 
@@ -76,13 +85,18 @@ ports because the server requests the exact allowed port on `127.0.0.1`.
 ## 3. Set up Computer B
 
 ```bash
+curl -fsSL \
+  'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-application-host.sh' \
+  -o setup-application-host.sh
+chmod 750 setup-application-host.sh
+
 export SERVER_HOST='tunnel.example.com'
 export INSTALL_UUID='<stable-uuid>'
 export AGENT_USERNAME='<agent-user>'
 export AGENT_PASSWORD='<long-agent-secret>'
 export AGENT_PORTS='6379,5432'
 
-./scripts/setup-application-host.sh
+./setup-application-host.sh
 ```
 
 Applications on B connect only to loopback:
@@ -94,8 +108,9 @@ postgresql://<postgres-role>:<password>@127.0.0.1:5432/<database>
 
 ## 4. Set up Computer C and additional hosts
 
-Run the same `scripts/setup-application-host.sh` command on C, D, and each
-additional consumer. Use the same server hostname and UUID. The current server
+Download the same pinned `setup-application-host.sh` version on C, D, and each
+additional consumer, then run the same command. Use the same server hostname
+and UUID. The current server
 has one transport credential pair, so all agents use the same
 `AGENT_USERNAME`/`AGENT_PASSWORD` unless the server authentication model is
 extended.

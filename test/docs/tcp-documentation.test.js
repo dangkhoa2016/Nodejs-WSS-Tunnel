@@ -66,6 +66,7 @@ test('English and Vietnamese references preserve mode-first navigation', () => {
 
 test('multi-host guides document repeatable agents and limit scope', () => {
   for (const guide of multiHostGuides) {
+    assert.doesNotMatch(guide, /clone (the )?repository/i);
     assert.match(guide, /setup-service-host\.sh/);
     assert.match(guide, /setup-application-host\.sh/);
     assert.match(guide, /TCP_MAX_CONNECTIONS_PER_PORT/);
@@ -73,4 +74,9 @@ test('multi-host guides document repeatable agents and limit scope', () => {
     assert.match(guide, /Redis ACL/i);
     assert.match(guide, /PostgreSQL role/i);
   }
+});
+
+test('multi-host guides install one pinned script without a source checkout', () => {
+  assert.match(multiHostGuides[0], /raw\.githubusercontent\.com[^\n]*<release-tag>[^\n]*setup-service-host\.sh/);
+  assert.match(multiHostGuides[1], /raw\.githubusercontent\.com[^\n]*<release-tag>[^\n]*setup-service-host\.sh/);
 });

@@ -81,15 +81,18 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 ├── .env.example.vps        # Full env template: VPS / dedicated host (direct TCP)
 ├── .env.example.single-port # Full env template: Render/Railway/Fly.io/Codespaces (agent mode)
 ├── dist/
-│   ├── client.js           # Standalone esbuild bundle for tunnel clients (~48KB, no server deps)
+│   ├── client.js           # Standalone esbuild bundle for tunnel clients (~49KB, no server deps)
 │   └── tcp-agent.js        # Standalone esbuild bundle for TCP agents (~29KB, no server deps)
 ├── docs/
 │   ├── tcp-tunnel.md                             # Detailed TCP tunnel & TCP agent guide (EN)
 │   ├── tcp-tunnel.vi.md                          # Detailed TCP tunnel & TCP agent guide (VI)
 │   ├── guide-external-app-to-tcp-services.md     # Guide: connect an external app (e.g. Redis) to tunneled TCP services (EN)
-│   ├── guide-external-app-to-tcp-services.vi.md  # Guide: connect an external app (e.g. Redis) to tunneled TCP services (VI)
-│   ├── setup-tcp-agent.sh                        # Script: expose a tunneled TCP service (e.g. Redis) to this machine
-│   └── setup-tunnel-client.sh                    # Script: share a local service (e.g. Redis) with the Internet
+│   └── guide-external-app-to-tcp-services.vi.md  # Guide: connect an external app (e.g. Redis) to tunneled TCP services (VI)
+├── scripts/
+│   ├── setup-service-host.sh                     # Install the client beside Redis/PostgreSQL
+│   ├── setup-application-host.sh                 # Install an agent on each consuming application host
+│   ├── audit-commits.js                          # Commit-message audit invoked by CI
+│   └── audit-push.sh                             # Push-time commit audit invoked by CI
 ├── serve/
 │   ├── build.js            # esbuild bundler script (builds client.js + tcp-agent.js)
 │   ├── client.js           # Tunnel client source (imports shared modules)
@@ -126,11 +129,14 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 │   │   ├── shutdown.test.js
 │   │   ├── stream-manager.test.js
 │   │   ├── stream-manager-tcp.test.js
+│   │   ├── tls-trust.test.js
 │   │   └── websocket-auth.test.js
 │   ├── tcp/                 # TCP tunnel tests
+│   │   ├── protocol-negative.test.js
 │   │   ├── tcp-agent-e2e.test.js
 │   │   ├── tcp-agent-process.test.js
 │   │   ├── tcp-agent-server.test.js
+│   │   ├── tcp-agent-soak.test.js
 │   │   ├── tcp-cleanup.test.js
 │   │   ├── tcp-client-handler.test.js
 │   │   ├── tcp-e2e.test.js
@@ -142,6 +148,8 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 │   │   ├── tcp-stress.test.js
 │   │   └── virtual-socket.test.js
 │   ├── shared/              # Shared module tests
+│   │   ├── audit-push.test.js
+│   │   ├── commit-audit.test.js
 │   │   ├── config-validation.test.js
 │   │   ├── ip-allowlist.test.js
 │   │   ├── logger.test.js
@@ -152,6 +160,8 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 │   ├── installer/           # Installer tests
 │   │   ├── installer.test.js
 │   │   └── installer-e2e.test.js
+│   ├── scripts/             # Multi-host setup script tests
+│   │   └── multi-host-setup.test.js
 │   ├── helpers/
 │   │   └── tcp-test-setup.js
 │   └── fixtures/
@@ -164,7 +174,8 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 ├── TESTING.md              # Detailed testing instructions (EN)
 ├── TESTING.vi.md           # Detailed testing instructions (VI)
 ├── yarn.lock
-├── .github/workflows/ci.yml # CI: tests on Node 20/22/24 with Redis + Postgres
+├── .github/workflows/ci.yml  # CI: lint, tests (Node 20/22/24 + Redis/Postgres), audit, Docker, installer
+├── .github/workflows/soak.yml # Scheduled TCP agent soak workload
 └── Dockerfile
 ```
 
@@ -264,6 +275,7 @@ TCP_AGENT_USERNAME=agent
 TCP_AGENT_PASSWORD=agent_secret
 TCP_AGENT_ALLOWED_ORIGINS=
 TCP_AGENT_REQUIRE_TLS=false
+TCP_AGENT_TRUSTED_PROXIES=
 TCP_AGENT_MAX_STREAMS_PER_AGENT=100
 
 # Admin config API
@@ -346,7 +358,7 @@ Rails -- 127.0.0.1:6379 --> tcp-agent.js -- WS /tcp --> Server -- WS /tunnel -->
 
 > **Agent mode**: the external app connects to the agent's local port on the app host (e.g. `redis://127.0.0.1:6379`), **not** to the server.
 
-The `/tcp` endpoint only exists when `TCP_AGENT_ALLOWED_PORTS` is non-empty. It is protected by Basic Auth (defaults to the tunnel credentials, overridable with `TCP_AGENT_USERNAME`/`TCP_AGENT_PASSWORD`) and supports optional Origin allowlisting (`TCP_AGENT_ALLOWED_ORIGINS`) and TLS enforcement (`TCP_AGENT_REQUIRE_TLS`). The agent bundle is served at `/${INSTALL_UUID}-tcp-agent.js` with a minimal manifest at `/${INSTALL_UUID}-tcp-agent-package.json`.
+The `/tcp` endpoint only exists when `TCP_AGENT_ALLOWED_PORTS` is non-empty. It is protected by Basic Auth (defaults to the tunnel credentials, overridable with `TCP_AGENT_USERNAME`/`TCP_AGENT_PASSWORD`) and supports optional Origin allowlisting (`TCP_AGENT_ALLOWED_ORIGINS`) and TLS enforcement (`TCP_AGENT_REQUIRE_TLS`, trusting `X-Forwarded-Proto: https` only from proxies listed in `TCP_AGENT_TRUSTED_PROXIES`). The agent bundle is served at `/${INSTALL_UUID}-tcp-agent.js` with a minimal manifest at `/${INSTALL_UUID}-tcp-agent-package.json`.
 
 Both modes can coexist on the same server. See [docs/tcp-tunnel.md](docs/tcp-tunnel.md) for the full configuration guide and Rails/Redis examples.
 
@@ -376,6 +388,8 @@ The server exposes two health check endpoints that always return `200 ok`:
 
 These do not require authentication. The Docker image includes a `HEALTHCHECK` directive that pings `/__health`.
 
+The server also serves a small landing page at `GET /__info` that shows the install and config URLs; while no tunnel client is connected, `GET /` redirects to it.
+
 ---
 
 ## Graceful Shutdown
@@ -400,13 +414,13 @@ npm test
 
 See detailed testing instructions in [TESTING.md](TESTING.md).
 
-Run `yarn test` for the current test count. Local real-service tests may skip when Redis/Postgres are unavailable; CI sets `REQUIRE_TCP_SERVICES=1`. TCP coverage includes unit tests for the agent server and virtual socket, a process-level agent test, and an end-to-end agent test.
+Run `yarn test` for the current test count, or `yarn check` to run lint, tests, and the client bundle build together. Local real-service tests may skip when Redis/Postgres are unavailable; CI sets `REQUIRE_TCP_SERVICES=1`. TCP coverage includes unit tests for the agent server and virtual socket, a process-level agent test, an end-to-end agent test, plus protocol-negative (`yarn test:protocol-negative`) and bounded soak (`yarn test:soak`) tests.
 
 ---
 
 ## CI
 
-Tests run automatically on Node.js 20, 22, and 24 with Redis and Postgres services available for integration tests.
+CI runs on pushes to `main` and pull requests targeting `main`: lint plus standalone bundle verification, tests on Node.js 20, 22, and 24 with Redis and Postgres services available for integration tests, a dependency/commit audit (`yarn npm audit --all` + commit-message checks), a Docker job (build, health check, artifact routes, installer upgrade/rollback), and an installer job. A scheduled soak workflow (`.github/workflows/soak.yml`) runs the bounded TCP agent soak test weekly and on demand.
 
 ---
 

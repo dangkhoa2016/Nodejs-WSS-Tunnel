@@ -10,6 +10,10 @@ const guides = [
   read('docs/guide-external-app-to-tcp-services.md'),
   read('docs/guide-external-app-to-tcp-services.vi.md'),
 ];
+const multiHostGuides = [
+  read('docs/guide-multi-host-tcp-services.md'),
+  read('docs/guide-multi-host-tcp-services.vi.md'),
+];
 
 test('TCP references document current source paths and proxy trust', () => {
   for (const reference of references) {
@@ -58,4 +62,15 @@ test('English and Vietnamese references preserve mode-first navigation', () => {
   assert.match(references[1], /^## Chọn chế độ triển khai$/m);
   assert.match(guides[0], /^## Choose direct or agent mode$/m);
   assert.match(guides[1], /^## Chọn chế độ trực tiếp hoặc agent$/m);
+});
+
+test('multi-host guides document repeatable agents and limit scope', () => {
+  for (const guide of multiHostGuides) {
+    assert.match(guide, /setup-service-host\.sh/);
+    assert.match(guide, /setup-application-host\.sh/);
+    assert.match(guide, /TCP_MAX_CONNECTIONS_PER_PORT/);
+    assert.match(guide, /TCP_AGENT_MAX_STREAMS_PER_AGENT/);
+    assert.match(guide, /Redis ACL/i);
+    assert.match(guide, /PostgreSQL role/i);
+  }
 });

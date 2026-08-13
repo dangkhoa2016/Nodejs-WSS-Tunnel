@@ -10,6 +10,9 @@
 
 Use direct mode when the server can expose and firewall the exact service port. Use agent mode when only the HTTP/WebSocket port is public or the app must use loopback.
 
+For one service host shared with two or more application hosts, follow the
+[multi-host TCP services guide](guide-multi-host-tcp-services.md).
+
 ## 1. Overview and topology
 
 The tunnel has three moving parts:

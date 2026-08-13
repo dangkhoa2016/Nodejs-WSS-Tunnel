@@ -9,6 +9,9 @@
 ## Chọn chế độ trực tiếp hoặc agent
 Dùng chế độ trực tiếp khi server có thể expose và firewall đúng cổng dịch vụ. Dùng agent khi chỉ cổng HTTP/WebSocket được public hoặc app phải dùng loopback.
 
+Nếu một máy dịch vụ được chia sẻ cho hai hoặc nhiều máy ứng dụng, hãy xem
+[hướng dẫn dịch vụ TCP đa máy](guide-multi-host-tcp-services.vi.md).
+
 ## 1. Tổng quan và kiến trúc
 
 Tunnel gồm ba thành phần:

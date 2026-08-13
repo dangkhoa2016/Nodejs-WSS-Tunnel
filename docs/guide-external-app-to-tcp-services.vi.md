@@ -2,11 +2,12 @@
 
 > 🌐 Language / Ngôn ngữ: [English](guide-external-app-to-tcp-services.md) | **Tiếng Việt**
 
-> Dùng hướng dẫn này khi một ứng dụng trên máy này cần truy cập một dịch vụ
-> cục bộ (ví dụ Redis) chạy trên một máy khác nằm sau server tunnel
-> `Nodejs-WSS-Tunnel`. Một thiết lập điển hình: Redis chạy trên máy nhà/server
-> của bạn; ứng dụng đã deploy (Rails, Sidekiq, Python, Node...) trên một máy
-> khác cần kết nối tới nó.
+> Dùng hướng dẫn này khi app trên một máy cần truy cập Redis hoặc dịch vụ TCP
+> trên máy nằm sau Nodejs-WSS-Tunnel. Máy dịch vụ chạy tunnel client; máy ứng
+> dụng chạy agent hoặc sử dụng chế độ trực tiếp.
+
+## Chọn chế độ trực tiếp hoặc agent
+Dùng chế độ trực tiếp khi server có thể expose và firewall đúng cổng dịch vụ. Dùng agent khi chỉ cổng HTTP/WebSocket được public hoặc app phải dùng loopback.
 
 ## 1. Tổng quan và kiến trúc
 
@@ -15,7 +16,8 @@ Tunnel gồm ba thành phần:
 - **Tunnel client** (`docs/setup-tunnel-client.sh`) — chạy trên máy chứa dịch
   vụ (Redis). Nó kết nối tới server qua WebSocket `/tunnel`.
 - **Server** (`Nodejs-WSS-Tunnel`) — relay luồng dữ liệu giữa client và các
-  agent. Chỉ expose **1 cổng public duy nhất** (7860).
+  agent. Trong ví dụ này server expose một cổng HTTP/WebSocket có thể cấu hình
+  (`PORT`, mặc định `7860`).
 - **TCP agent** (`docs/setup-tcp-agent.sh`) — chạy trên máy ngoài / máy chạy
   ứng dụng. Nó lắng nghe trên một cổng local và bắc cầu tới server qua
   WebSocket `/tcp`.
@@ -162,9 +164,10 @@ Chỉ dùng được khi CẢ HAI điều kiện đúng:
    forward cổng thứ hai).
 
 Khi đã mở, ứng dụng có thể kết nối thẳng tới edge của server:
+Chế độ trực tiếp là TCP thô nếu không có TCP TLS proxy riêng. Hãy giới hạn bằng firewall và `TCP_TUNNEL_ALLOWED_IPS`.
 
 ```bash
-redis-cli -h <server-host> -p 443 -a <redis-password> --tls ping
+redis-cli -h <server-host> -p 6379 -a <redis-password> ping
 # PONG
 ```
 
@@ -178,7 +181,8 @@ Nếu không, hãy dùng **Phần 2** (TCP agent).
 | Log server `tcp reject reason=no_client` | Chưa có tunnel client kết nối qua `/tunnel`. Chạy Phần 1 trên máy Redis; kiểm tra `tail -f ~/.tunnel-client/client.log` có dòng `[standard] [client] connected`. |
 | `redis-cli ping` báo `NOAUTH` | Thiếu password: thêm `-a <redis-password>`. |
 | `connect ECONNREFUSED` trên `127.0.0.1:6379` | Agent chưa chạy. Chạy lại Phần 2. |
-| Redis báo `READONLY` / timeout khi tải cao | Kiểm tra `TCP_MAX_CONNECTIONS_PER_PORT` (server, mặc định 20) và `TCP_AGENT_MAX_STREAMS_PER_AGENT` (mặc định 100). |
+| Redis báo `READONLY` | Tunnel đã tới replica hoặc Redis chỉ đọc; hãy kết nối primary có thể ghi. |
+| Request timeout khi tải cao | Kiểm tra `TCP_MAX_CONNECTIONS_PER_PORT`, `TCP_AGENT_MAX_STREAMS_PER_AGENT`, log và năng lực dịch vụ. |
 
 ## 9. Lưu ý bảo mật
 

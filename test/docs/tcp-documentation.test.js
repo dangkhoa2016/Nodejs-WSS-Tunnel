@@ -24,7 +24,7 @@ test('TCP references document current source paths and proxy trust', () => {
 
 test('TCP references provide complete non-interactive installation commands', () => {
   for (const reference of references) {
-    assert.match(reference, /curl[^\n]*-install[^\n]*\|[\s\S]{0,240}TUNNEL_SERVER_URL=[^\n]*bash/);
+    assert.match(reference, /export TUNNEL_SERVER_URL=[^\n]+[\s\S]{0,240}curl[^\n]*-install[^\n]*\| bash/);
     assert.match(reference, /tcp-agent\.js/);
     assert.match(reference, /tcp-agent-package\.json/);
   }

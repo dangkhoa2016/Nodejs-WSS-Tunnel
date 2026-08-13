@@ -1,8 +1,19 @@
-# TCP Tunnel Guide (Redis, Postgres, MySQL...)
+# TCP Tunnel: Deployment and Operations
 
 > 🌐 Language / Ngôn ngữ: **English** | [Tiếng Việt](tcp-tunnel.vi.md)
 
-This guide explains how to enable the **TCP tunnel** feature of Nodejs-WSS-Tunnel to expose TCP services (Redis, Postgres, MySQL...) running on the tunnel client side (Google Colab, Kaggle, a local PC) to the public Internet through the intermediary server — for example, so an external app such as **Rails** can connect to Redis through a regular Redis client.
+Use this guide to get a first TCP tunnel working and then harden it for production.
+## Choose a deployment mode
+
+| Requirement | Direct mode | Agent mode |
+|---|---|---|
+| External app connects to | Server TCP port | Agent loopback port |
+| Extra public TCP ports | Required | Not required |
+| Best fit | VPS or network you control | PaaS with one public HTTP port |
+| External transport | Raw TCP | Local TCP, then WSS |
+
+Use direct mode when the server can bind and firewall the service port. Use agent mode when the server exposes only its configurable HTTP/WebSocket `PORT` (default `7860`) or the application must connect through loopback.
+
 
 ---
 
@@ -41,10 +52,10 @@ This is a **reverse** tunnel:
 ### Important characteristics
 
 - **Tunnel client limit (default 1)**: the server accepts up to `MAX_TUNNEL_CLIENTS` tunnel clients (default `1`, env-configurable); clients beyond the limit are rejected with close code `1013`.
-- **No port remapping**: the server sends `port: serverPort` in the `TCP_OPEN` frame (`src/TcpRouter.js`), and the client dials that same port on `TCP_TUNNEL_HOST`. This means the local service **must listen on the exact port** the external app connects to (e.g. Redis must be on `6379`; you cannot remap it to another port).
+- **No port remapping**: the server sends `port: serverPort` in the `TCP_OPEN` frame (`src/tcp/TcpRouter.js`), and the client dials that same port on `TCP_TUNNEL_HOST`. This means the local service **must listen on the exact port** the external app connects to (e.g. Redis must be on `6379`; you cannot remap it to another port).
 - **Bidirectional backpressure**: `PAUSE`/`RESUME` frames combined with WebSocket `bufferedAmount` and high/low water marks prevent memory leaks when one side is slower than the other.
 
-### TCP frames in the protocol (`src/protocol.js`)
+### TCP frames in the protocol (`src/shared/protocol.js`)
 
 | Type | Value | Meaning |
 |------|-------|---------|
@@ -68,7 +79,7 @@ This is a **reverse** tunnel:
 
 ## 3. Server Configuration (Node.js)
 
-All TCP environment variables are read in `src/config.js` and used in `src/TcpRouter.js`.
+All TCP environment variables are read in `src/shared/config.js` and used in `src/tcp/TcpRouter.js`.
 
 ### 3.1 Environment variable reference
 
@@ -121,7 +132,7 @@ TCP_SHUTDOWN_DRAIN_TIMEOUT_MS=5000
 
 > ⚠️ **Security warning**: if `TCP_TUNNEL_BIND_HOST=0.0.0.0` and `TCP_TUNNEL_ALLOWED_IPS` is empty, the server prints `[config] SECURITY WARNING: ...` because Redis becomes reachable from anywhere. Always narrow `TCP_TUNNEL_ALLOWED_IPS`.
 >
-> ⚠️ **IP restriction**: the filter supports IPv4 only (`src/ipAllowlist.js`). IPv4-mapped addresses (`::ffff:127.0.0.1`) are normalized automatically, but native IPv6 (`::1`) will **not** match an allowlist entry.
+> ⚠️ **IP restriction**: the filter supports IPv4 only (`src/shared/ipAllowlist.js`). IPv4-mapped addresses (`::ffff:127.0.0.1`) are normalized automatically, but native IPv6 (`::1`) will **not** match an allowlist entry.
 
 Restart the server after editing:
 
@@ -172,9 +183,9 @@ node serve/client.js
 ### 4.3 Install via `setup.sh`
 
 ```bash
-TUNNEL_SERVER_URL=wss://your-server.example.com/tunnel \
-TUNNEL_USERNAME=admin \
-TUNNEL_PASSWORD=your_strong_secret \
+export TUNNEL_SERVER_URL=wss://your-server.example.com/tunnel
+export TUNNEL_USERNAME=admin
+export TUNNEL_PASSWORD=your_strong_secret
 curl -fsSL https://your-server.example.com/<install-uuid>-install | bash
 ```
 
@@ -230,12 +241,12 @@ Download the prebuilt bundle and install its single dependency:
 curl -fL https://your-server.example.com/<INSTALL_UUID>-tcp-agent.js -o tcp-agent.js
 npm i ws
 ```
-
-Or install via the manifest (gives you a `package.json` with the right dependency):
+Or install both the bundle and its manifest:
 
 ```bash
+curl -fL https://your-server.example.com/<INSTALL_UUID>-tcp-agent.js -o tcp-agent.js
 curl -fsSL https://your-server.example.com/<INSTALL_UUID>-tcp-agent-package.json -o package.json
-npm i
+npm install --omit=dev
 ```
 
 > `<INSTALL_UUID>` is the server's `INSTALL_UUID` value (set it in the server's
@@ -278,6 +289,7 @@ Enable the agent endpoint and the ports an agent may open:
 | `TCP_AGENT_PASSWORD` | `TUNNEL_PASSWORD` | Agent WS credentials; falls back to the tunnel credentials when unset |
 | `TCP_AGENT_ALLOWED_ORIGINS` | empty | Comma-separated Origin allowlist; an Origin header not in the list is rejected (403), no Origin header is allowed |
 | `TCP_AGENT_REQUIRE_TLS` | `false` | Require `req.socket.encrypted` or `X-Forwarded-Proto: https` for `/tcp` upgrades (426 otherwise) |
+| `TCP_AGENT_TRUSTED_PROXIES` | empty | Immediate trusted reverse-proxy IPv4/CIDR list; only these peers may supply `X-Forwarded-Proto` |
 | `TCP_AGENT_MAX_STREAMS_PER_AGENT` | `100` | Max concurrent streams per agent (`0` = unlimited) |
 
 Minimal example:
@@ -293,7 +305,7 @@ TCP_AGENT_PATH=/tcp
 - The agent WebSocket uses Basic Auth: the tunnel credentials (`TUNNEL_USERNAME`/`TUNNEL_PASSWORD`) by default, overridable per side with `TCP_AGENT_USERNAME`/`TCP_AGENT_PASSWORD` (server) and `AGENT_USERNAME`/`AGENT_PASSWORD` (agent).
 - Use `wss://` (TLS) on public networks — the TCP tunnel is plaintext.
 - An empty `TCP_AGENT_ALLOWED_PORTS` disables the agent endpoint entirely.
-- `TCP_AGENT_REQUIRE_TLS` trusts the `X-Forwarded-Proto` header, so only enable it behind a TLS-terminating reverse proxy that sanitizes/overwrites that header.
+- With `TCP_AGENT_REQUIRE_TLS=true`, an encrypted socket is accepted directly. `X-Forwarded-Proto: https` is accepted only when the immediate peer matches `TCP_AGENT_TRUSTED_PROXIES`; configure the proxy to overwrite client-supplied headers.
 
 ### 5.6 Manual check
 
@@ -302,7 +314,7 @@ redis-cli -h 127.0.0.1 -p 6379 ping
 # PONG
 ```
 
-Direct mode (`TCP_TUNNEL_PORTS` on the tunnel client) remains the standard choice for VPS deployments; both modes can coexist on the same server.
+Direct mode (`TCP_TUNNEL_PORTS` on the server) remains the standard choice for VPS deployments; both modes can coexist on the same server.
 
 ---
 

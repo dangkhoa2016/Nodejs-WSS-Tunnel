@@ -2,10 +2,13 @@
 
 > 🌐 Language / Ngôn ngữ: **English** | [Tiếng Việt](guide-external-app-to-tcp-services.vi.md)
 
-> Use this guide when an app on one machine must reach a local service (e.g.
-> Redis) that runs on another machine behind the Nodejs-WSS-Tunnel server.
-> A typical setup: Redis runs on your home/server machine; your deployed app
-> (Rails, Sidekiq, Python, Node...) on a different machine must talk to it.
+> Use this guide when an app on one machine must reach Redis or another TCP
+> service on a machine behind Nodejs-WSS-Tunnel. The service host runs the
+> tunnel client; the application host either runs an agent or uses direct mode.
+
+## Choose direct or agent mode
+
+Use direct mode when the server can expose and firewall the exact service port. Use agent mode when only the HTTP/WebSocket port is public or the app must use loopback.
 
 ## 1. Overview and topology
 
@@ -14,7 +17,8 @@ The tunnel has three moving parts:
 - **Tunnel client** (`docs/setup-tunnel-client.sh`) — runs on the machine that
   hosts the service (Redis). It dials the server over WebSocket `/tunnel`.
 - **Server** (`Nodejs-WSS-Tunnel`) — relays streams between the client and
-  agents. Exposes exactly one public port (7860).
+  agents. In this agent-mode example it exposes one configurable HTTP/WebSocket
+  port (`PORT`, default `7860`).
 - **TCP agent** (`docs/setup-tcp-agent.sh`) — runs on the external/app-host
   machine. It listens on a local port and bridges to the server over WebSocket
   `/tcp`.
@@ -161,9 +165,10 @@ This works only if BOTH hold:
    currently forward a second port).
 
 Only then can the app connect straight to the server edge:
+Direct mode is raw TCP unless a separate TCP TLS proxy is deployed. Restrict it with a firewall and `TCP_TUNNEL_ALLOWED_IPS`.
 
 ```bash
-redis-cli -h <server-host> -p 443 -a <redis-password> --tls ping
+redis-cli -h <server-host> -p 6379 -a <redis-password> ping
 # PONG
 ```
 
@@ -177,7 +182,8 @@ Otherwise prefer **Part 2** (the TCP agent).
 | Server log `tcp reject reason=no_client` | No tunnel client is connected over `/tunnel`. Run Part 1 on the Redis machine; check `tail -f ~/.tunnel-client/client.log` for `[standard] [client] connected`. |
 | `redis-cli ping` says `NOAUTH` | Missing password: add `-a <redis-password>`. |
 | `connect ECONNREFUSED` on `127.0.0.1:6379` | The agent is not running. Re-run Part 2. |
-| Redis says `READONLY` / times out under load | Check `TCP_MAX_CONNECTIONS_PER_PORT` (server, default 20) and `TCP_AGENT_MAX_STREAMS_PER_AGENT` (default 100). |
+| Redis says `READONLY` | The tunnel reached a replica or read-only Redis node; connect to the writable primary. |
+| Requests time out under load | Check `TCP_MAX_CONNECTIONS_PER_PORT`, `TCP_AGENT_MAX_STREAMS_PER_AGENT`, logs, and service capacity. |
 
 ## 9. Security notes
 

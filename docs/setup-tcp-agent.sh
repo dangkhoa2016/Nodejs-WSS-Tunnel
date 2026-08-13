@@ -24,6 +24,7 @@ set -euo pipefail
 #   AGENT_BUNDLE_URL   URL that serves tcp-agent.js (default: <server>/<INSTALL_UUID>-tcp-agent.js)
 #   AGENT_BUNDLE_PATH  local path to tcp-agent.js (skips download)
 #   AGENT_PORTS        local ports to expose (default 6379)
+#   AGENT_BIND_HOST    listen address (default 127.0.0.1; keep loopback in production)
 #   AGENT_DIR          working directory (default ~/.redis-agent)
 # =============================================================================
 
@@ -77,7 +78,7 @@ if [ ! -f package.json ]; then
   if curl -fsSL "https://$SERVER_HOST/$INSTALL_UUID-tcp-agent-package.json" -o package.json 2>/dev/null; then
     info "Fetched package manifest from server"
   else
-    printf '{"type":"module","private":true,"dependencies":{"ws":"^8.21.1"}}\n' > package.json
+    printf '{"type":"module","private":true,"dependencies":{"ws":"^8.21.3"}}\n' > package.json
     warn "Wrote minimal package.json (server manifest unavailable)"
   fi
 fi

@@ -26,6 +26,7 @@ yarn-error.log*
 
 # Temporary files
 temp/
+.worktrees/
 
 # OS files
 .DS_Store

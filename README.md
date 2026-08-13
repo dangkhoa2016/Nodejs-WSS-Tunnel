@@ -72,9 +72,10 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 │   ├── tcp-tunnel.md                             # Detailed TCP tunnel & TCP agent guide (EN)
 │   ├── tcp-tunnel.vi.md                          # Detailed TCP tunnel & TCP agent guide (VI)
 │   ├── guide-external-app-to-tcp-services.md     # Guide: connect an external app (e.g. Redis) to tunneled TCP services (EN)
-│   ├── guide-external-app-to-tcp-services.vi.md  # Guide: connect an external app (e.g. Redis) to tunneled TCP services (VI)
-│   ├── setup-tcp-agent.sh                        # Script: expose a tunneled TCP service (e.g. Redis) to this machine
-│   └── setup-tunnel-client.sh                    # Script: share a local service (e.g. Redis) with the Internet
+│   └── guide-external-app-to-tcp-services.vi.md  # Guide: connect an external app (e.g. Redis) to tunneled TCP services (VI)
+├── scripts/
+│   ├── setup-service-host.sh                     # Install the client beside Redis/PostgreSQL
+│   └── setup-application-host.sh                 # Install an agent on each consuming application host
 ├── serve/
 │   ├── build.js            # esbuild bundler script (builds client.js + tcp-agent.js)
 │   ├── client.js           # Tunnel client source (imports shared modules)

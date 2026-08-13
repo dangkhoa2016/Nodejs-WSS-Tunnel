@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -14,6 +14,8 @@ const legacyMultiHostPages = [
   read('docs/guide-multi-host-tcp-services.md'),
   read('docs/guide-multi-host-tcp-services.vi.md'),
 ];
+const serviceHostSetup = read('scripts/setup-service-host.sh');
+const applicationHostSetup = read('scripts/setup-application-host.sh');
 
 test('TCP references document current source paths and proxy trust', () => {
   for (const reference of references) {
@@ -45,16 +47,21 @@ test('external-service guides keep direct and agent verification distinct', () =
 });
 
 test('agent setup documents safe binding and matches served dependencies', () => {
-  const setup = read('docs/setup-tcp-agent.sh');
   const agentManifest = JSON.parse(read('serve/tcp-agent-package.json'));
   const clientManifest = JSON.parse(read('serve/client-package.json'));
   const rootManifest = JSON.parse(read('package.json'));
   const wsRange = rootManifest.dependencies.ws;
 
-  assert.match(setup, /#\s+AGENT_BIND_HOST\s+/);
-  assert.match(setup, new RegExp(`"ws":"\\${wsRange}"`));
+  assert.match(applicationHostSetup, /AGENT_BIND_HOST=/);
+  assert.match(applicationHostSetup, new RegExp(`"ws":"\\${wsRange}"`));
+  assert.match(serviceHostSetup, /TCP_CLIENT_ALLOWED_HOSTS/);
   assert.equal(agentManifest.dependencies.ws, wsRange);
   assert.equal(clientManifest.dependencies.ws, wsRange);
+});
+
+test('legacy TCP installer copies stay removed', () => {
+  assert.equal(existsSync(new URL('docs/setup-tcp-agent.sh', root)), false);
+  assert.equal(existsSync(new URL('docs/setup-tunnel-client.sh', root)), false);
 });
 
 test('English and Vietnamese references preserve mode-first navigation', () => {

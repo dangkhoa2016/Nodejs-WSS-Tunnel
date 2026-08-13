@@ -1,8 +1,19 @@
-# Hướng dẫn Tunnel TCP (Redis, Postgres, MySQL...)
+# TCP Tunnel: Triển khai và vận hành
 
 > 🌐 Language / Ngôn ngữ: [English](tcp-tunnel.md) | **Tiếng Việt**
 
-Tài liệu này hướng dẫn cách kích hoạt **tunnel TCP** của Nodejs-WSS-Tunnel để phơi bày các dịch vụ TCP (Redis, Postgres, MySQL...) đang chạy ở phía tunnel client (Google Colab, Kaggle, PC cục bộ) ra ngoài Internet thông qua máy chủ trung gian — ví dụ để một ứng dụng bên ngoài như **Rails** dùng Redis client kết nối vào Redis.
+Tài liệu này giúp bạn tạo kết nối TCP đầu tiên rồi gia cố để chạy production.
+## Chọn chế độ triển khai
+
+| Nhu cầu | Chế độ trực tiếp | Chế độ agent |
+|---|---|---|
+| App ngoài kết nối tới | Cổng TCP server | Cổng loopback agent |
+| Cần thêm cổng TCP public | Có | Không |
+| Phù hợp | VPS/mạng tự quản lý | PaaS chỉ có một cổng HTTP |
+| Truyền tải từ app | TCP thô | TCP local, sau đó WSS |
+
+Dùng chế độ trực tiếp khi server có thể bind và firewall cổng dịch vụ. Dùng chế độ agent khi server chỉ expose `PORT` HTTP/WebSocket có thể cấu hình (mặc định `7860`) hoặc app chỉ được kết nối qua loopback.
+
 
 ---
 
@@ -41,10 +52,10 @@ Tài liệu này hướng dẫn cách kích hoạt **tunnel TCP** của Nodejs-W
 ### Đặc điểm quan trọng
 
 - **Giới hạn tunnel client (mặc định 1)**: máy chủ chấp nhận tối đa `MAX_TUNNEL_CLIENTS` tunnel client (mặc định `1`, cấu hình qua env); client vượt giới hạn bị từ chối với close code `1013`.
-- **Port không được remap**: server gửi `port: serverPort` trong frame `TCP_OPEN` (`src/TcpRouter.js`), client dial đúng cổng đó tới `TCP_TUNNEL_HOST`. Nghĩa là dịch vụ local **phải listen đúng cổng** mà app ngoài nối tới (ví dụ Redis phải ở `6379`, không đổi được sang cổng khác).
+- **Port không được remap**: server gửi `port: serverPort` trong frame `TCP_OPEN` (`src/tcp/TcpRouter.js`), client dial đúng cổng đó tới `TCP_TUNNEL_HOST`. Nghĩa là dịch vụ local **phải listen đúng cổng** mà app ngoài nối tới (ví dụ Redis phải ở `6379`, không đổi được sang cổng khác).
 - **Backpressure hai chiều**: frame `PAUSE`/`RESUME` kết hợp `bufferedAmount` của WebSocket và high/low water mark ngăn rò rỉ bộ nhớ khi một đầu chậm hơn đầu kia.
 
-### Các frame TCP trong giao thức (`src/protocol.js`)
+### Các frame TCP trong giao thức (`src/shared/protocol.js`)
 
 | Type | Giá trị | Ý nghĩa |
 |------|---------|---------|
@@ -68,7 +79,7 @@ Tài liệu này hướng dẫn cách kích hoạt **tunnel TCP** của Nodejs-W
 
 ## 3. Cấu hình phía Server (nodejs)
 
-Mọi biến môi trường TCP được đọc trong `src/config.js` và dùng trong `src/TcpRouter.js`.
+Mọi biến môi trường TCP được đọc trong `src/shared/config.js` và dùng trong `src/tcp/TcpRouter.js`.
 
 ### 3.1 Bảng biến môi trường
 
@@ -121,7 +132,7 @@ TCP_SHUTDOWN_DRAIN_TIMEOUT_MS=5000
 
 > ⚠️ **Cảnh báo bảo mật**: nếu `TCP_TUNNEL_BIND_HOST=0.0.0.0` mà `TCP_TUNNEL_ALLOWED_IPS` để trống, server in cảnh báo `[config] SECURITY WARNING` vì Redis sẽ bị phơi ra toàn mạng. Luôn hẹp `TCP_TUNNEL_ALLOWED_IPS` lại.
 >
-> ⚠️ **Giới hạn IP**: bộ lọc chỉ hỗ trợ IPv4 (`src/ipAllowlist.js`). Địa chỉ IPv4-mapped (`::ffff:127.0.0.1`) được chuẩn hóa tự động, nhưng IPv6 thuần (`::1`) sẽ **không** khớp allowlist.
+> ⚠️ **Giới hạn IP**: bộ lọc chỉ hỗ trợ IPv4 (`src/shared/ipAllowlist.js`). Địa chỉ IPv4-mapped (`::ffff:127.0.0.1`) được chuẩn hóa tự động, nhưng IPv6 thuần (`::1`) sẽ **không** khớp allowlist.
 
 Sau khi sửa, khởi động lại server:
 
@@ -172,9 +183,9 @@ node serve/client.js
 ### 4.3 Cài qua `setup.sh`
 
 ```bash
-TUNNEL_SERVER_URL=wss://your-server.example.com/tunnel \
-TUNNEL_USERNAME=admin \
-TUNNEL_PASSWORD=your_strong_secret \
+export TUNNEL_SERVER_URL=wss://your-server.example.com/tunnel
+export TUNNEL_USERNAME=admin
+export TUNNEL_PASSWORD=your_strong_secret
 curl -fsSL https://your-server.example.com/<install-uuid>-install | bash
 ```
 
@@ -230,12 +241,12 @@ Tải bundle đã build sẵn và cài dependency duy nhất:
 curl -fL https://your-server.example.com/<INSTALL_UUID>-tcp-agent.js -o tcp-agent.js
 npm i ws
 ```
-
-Hoặc cài qua manifest (cho bạn `package.json` kèm dependency đúng):
+Hoặc tải cả bundle và manifest:
 
 ```bash
+curl -fL https://your-server.example.com/<INSTALL_UUID>-tcp-agent.js -o tcp-agent.js
 curl -fsSL https://your-server.example.com/<INSTALL_UUID>-tcp-agent-package.json -o package.json
-npm i
+npm install --omit=dev
 ```
 
 > `<INSTALL_UUID>` là giá trị `INSTALL_UUID` của server (đặt trong file `.env`
@@ -278,6 +289,7 @@ Bật endpoint agent và khai báo các cổng agent được phép mở:
 | `TCP_AGENT_PASSWORD` | `TUNNEL_PASSWORD` | Credentials WS của agent; fallback sang tunnel credentials khi không đặt |
 | `TCP_AGENT_ALLOWED_ORIGINS` | trống | Danh sách Origin được phép, phân tách bằng dấu phẩy; Origin header có mặt nhưng không nằm trong danh sách sẽ bị từ chối (403), không gửi Origin header thì được phép |
 | `TCP_AGENT_REQUIRE_TLS` | `false` | Yêu cầu `req.socket.encrypted` hoặc `X-Forwarded-Proto: https` cho upgrade `/tcp` (nếu không sẽ 426) |
+| `TCP_AGENT_TRUSTED_PROXIES` | trống | Danh sách IPv4/CIDR của reverse proxy trực tiếp; chỉ các peer này được cung cấp `X-Forwarded-Proto` |
 | `TCP_AGENT_MAX_STREAMS_PER_AGENT` | `100` | Số stream đồng thời tối đa mỗi agent (`0` = không giới hạn) |
 
 Ví dụ tối thiểu:
@@ -293,7 +305,7 @@ TCP_AGENT_PATH=/tcp
 - WebSocket của agent dùng Basic Auth: mặc định là tunnel credentials (`TUNNEL_USERNAME`/`TUNNEL_PASSWORD`), có thể ghi đè riêng từng phía bằng `TCP_AGENT_USERNAME`/`TCP_AGENT_PASSWORD` (server) và `AGENT_USERNAME`/`AGENT_PASSWORD` (agent).
 - Dùng `wss://` (TLS) khi đi qua Internet — tunnel TCP là plaintext.
 - `TCP_AGENT_ALLOWED_PORTS` để trống sẽ tắt hẳn endpoint agent.
-- `TCP_AGENT_REQUIRE_TLS` tin tưởng header `X-Forwarded-Proto`, vì vậy chỉ nên bật khi đứng sau reverse proxy kết thúc TLS có vệ sinh/ghi đè header này.
+- Với `TCP_AGENT_REQUIRE_TLS=true`, socket mã hóa trực tiếp được chấp nhận. `X-Forwarded-Proto: https` chỉ được chấp nhận khi peer trực tiếp khớp `TCP_AGENT_TRUSTED_PROXIES`; proxy phải ghi đè header do client gửi.
 
 ### 5.6 Kiểm tra nhanh
 
@@ -302,7 +314,7 @@ redis-cli -h 127.0.0.1 -p 6379 ping
 # PONG
 ```
 
-Chế độ trực tiếp (`TCP_TUNNEL_PORTS` trên tunnel client) vẫn là lựa chọn chuẩn cho VPS; cả hai chế độ có thể cùng tồn tại trên một server.
+Chế độ trực tiếp (`TCP_TUNNEL_PORTS` trên server) vẫn là lựa chọn chuẩn cho VPS; cả hai chế độ có thể cùng tồn tại trên một server.
 
 ---
 

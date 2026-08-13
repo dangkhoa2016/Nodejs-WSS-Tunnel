@@ -81,15 +81,18 @@
 ├── .env.example.vps        # Template env đầy đủ: VPS / máy chủ riêng (TCP trực tiếp)
 ├── .env.example.single-port # Template env đầy đủ: Render/Railway/Fly.io/Codespaces (chế độ agent)
 ├── dist/
-│   ├── client.js           # Bundle esbuild độc lập cho tunnel clients (~48KB, không có deps máy chủ)
+│   ├── client.js           # Bundle esbuild độc lập cho tunnel clients (~49KB, không có deps máy chủ)
 │   └── tcp-agent.js        # Bundle esbuild độc lập cho TCP agents (~29KB, không có deps máy chủ)
 ├── docs/
 │   ├── tcp-tunnel.md                             # Hướng dẫn chi tiết TCP tunnel & TCP agent (EN)
 │   ├── tcp-tunnel.vi.md                          # Hướng dẫn chi tiết TCP tunnel & TCP agent (VI)
 │   ├── guide-external-app-to-tcp-services.md     # Hướng dẫn kết nối ứng dụng ngoài với TCP services (Redis) (EN)
-│   ├── guide-external-app-to-tcp-services.vi.md  # Hướng dẫn kết nối ứng dụng ngoài với TCP services (Redis) (VI)
-│   ├── setup-tcp-agent.sh                        # Script: mở TCP service qua tunnel (vd. Redis) tới máy này
-│   └── setup-tunnel-client.sh                    # Script: chia sẻ service cục bộ (vd. Redis) ra Internet
+│   └── guide-external-app-to-tcp-services.vi.md  # Hướng dẫn kết nối ứng dụng ngoài với TCP services (Redis) (VI)
+├── scripts/
+│   ├── setup-service-host.sh                     # Cài client bên cạnh Redis/PostgreSQL
+│   ├── setup-application-host.sh                 # Cài một agent trên mỗi máy chủ ứng dụng
+│   ├── audit-commits.js                          # Kiểm tra commit-message do CI gọi
+│   └── audit-push.sh                             # Kiểm tra commit lúc push do CI gọi
 ├── serve/
 │   ├── build.js            # Script bundler esbuild (dựng client.js + tcp-agent.js)
 │   ├── client.js           # Mã nguồn tunnel client (import các module dùng chung)
@@ -126,11 +129,14 @@
 │   │   ├── shutdown.test.js
 │   │   ├── stream-manager.test.js
 │   │   ├── stream-manager-tcp.test.js
+│   │   ├── tls-trust.test.js
 │   │   └── websocket-auth.test.js
 │   ├── tcp/                 # TCP tunnel tests
+│   │   ├── protocol-negative.test.js
 │   │   ├── tcp-agent-e2e.test.js
 │   │   ├── tcp-agent-process.test.js
 │   │   ├── tcp-agent-server.test.js
+│   │   ├── tcp-agent-soak.test.js
 │   │   ├── tcp-cleanup.test.js
 │   │   ├── tcp-client-handler.test.js
 │   │   ├── tcp-e2e.test.js
@@ -142,6 +148,8 @@
 │   │   ├── tcp-stress.test.js
 │   │   └── virtual-socket.test.js
 │   ├── shared/              # Shared module tests
+│   │   ├── audit-push.test.js
+│   │   ├── commit-audit.test.js
 │   │   ├── config-validation.test.js
 │   │   ├── ip-allowlist.test.js
 │   │   ├── logger.test.js
@@ -152,6 +160,8 @@
 │   ├── installer/           # Installer tests
 │   │   ├── installer.test.js
 │   │   └── installer-e2e.test.js
+│   ├── scripts/             # Kiểm thử script setup đa máy chủ
+│   │   └── multi-host-setup.test.js
 │   ├── helpers/
 │   │   └── tcp-test-setup.js
 │   └── fixtures/
@@ -164,7 +174,8 @@
 ├── TESTING.md              # Hướng dẫn kiểm thử chi tiết (EN)
 ├── TESTING.vi.md           # Hướng dẫn kiểm thử chi tiết (VI)
 ├── yarn.lock
-├── .github/workflows/ci.yml # CI: tests trên Node 20/22/24 với Redis + Postgres
+├── .github/workflows/ci.yml # CI: lint, tests (Node 20/22/24 + Redis/Postgres), audit, Docker, installer
+├── .github/workflows/soak.yml # Workflow soak TCP agent định kỳ
 └── Dockerfile
 ```
 
@@ -264,6 +275,7 @@ TCP_AGENT_USERNAME=agent
 TCP_AGENT_PASSWORD=agent_secret
 TCP_AGENT_ALLOWED_ORIGINS=
 TCP_AGENT_REQUIRE_TLS=false
+TCP_AGENT_TRUSTED_PROXIES=
 TCP_AGENT_MAX_STREAMS_PER_AGENT=100
 
 # Admin config API
@@ -346,7 +358,7 @@ Rails -- 127.0.0.1:6379 --> tcp-agent.js -- WS /tcp --> Server -- WS /tunnel -->
 
 > **Chế độ agent**: ứng dụng bên ngoài kết nối tới port cục bộ của agent trên máy chủ ứng dụng (ví dụ `redis://127.0.0.1:6379`), **không phải** tới máy chủ.
 
-Endpoint `/tcp` chỉ tồn tại khi `TCP_AGENT_ALLOWED_PORTS` không rỗng. Nó được bảo vệ bằng Basic Auth (mặc định dùng thông tin đăng nhập tunnel, có thể ghi đè bằng `TCP_AGENT_USERNAME`/`TCP_AGENT_PASSWORD`) và hỗ trợ tùy chọn danh sách trắng Origin (`TCP_AGENT_ALLOWED_ORIGINS`) cùng kiểm tra TLS (`TCP_AGENT_REQUIRE_TLS`). Bundle agent được phân phối tại `/${INSTALL_UUID}-tcp-agent.js` kèm manifest tối thiểu tại `/${INSTALL_UUID}-tcp-agent-package.json`.
+Endpoint `/tcp` chỉ tồn tại khi `TCP_AGENT_ALLOWED_PORTS` không rỗng. Nó được bảo vệ bằng Basic Auth (mặc định dùng thông tin đăng nhập tunnel, có thể ghi đè bằng `TCP_AGENT_USERNAME`/`TCP_AGENT_PASSWORD`) và hỗ trợ tùy chọn danh sách trắng Origin (`TCP_AGENT_ALLOWED_ORIGINS`) cùng kiểm tra TLS (`TCP_AGENT_REQUIRE_TLS`, tin tưởng tiêu đề `X-Forwarded-Proto: https` chỉ từ các proxy liệt kê trong `TCP_AGENT_TRUSTED_PROXIES`). Bundle agent được phân phối tại `/${INSTALL_UUID}-tcp-agent.js` kèm manifest tối thiểu tại `/${INSTALL_UUID}-tcp-agent-package.json`.
 
 Hai chế độ có thể cùng tồn tại trên một máy chủ. Xem [docs/tcp-tunnel.vi.md](docs/tcp-tunnel.vi.md) để có hướng dẫn cấu hình đầy đủ và ví dụ Rails/Redis.
 
@@ -376,6 +388,8 @@ Máy chủ phơi bày hai endpoint kiểm tra sức khỏe luôn trả về `200
 
 Các endpoint này không yêu cầu xác thực. Ảnh Docker bao gồm chỉ thị `HEALTHCHECK` ping `/__health`.
 
+Máy chủ cũng phục vụ một trang đích nhỏ tại `GET /__info` hiển thị các URL cài đặt và cấu hình; trong khi chưa có tunnel client nào kết nối, `GET /` sẽ chuyển hướng về đó.
+
 ---
 
 ## Tắt máy nhẹ nhàng
@@ -400,13 +414,13 @@ npm test
 
 Xem hướng dẫn kiểm thử chi tiết trong [TESTING.vi.md](TESTING.vi.md).
 
-Chạy `yarn test` để xem số kiểm thử hiện tại. Các kiểm thử dịch vụ thực cục bộ có thể bỏ qua khi không có Redis/Postgres; CI đặt `REQUIRE_TCP_SERVICES=1`. Phạm vi TCP gồm kiểm thử đơn vị cho agent server và virtual socket, kiểm thử cấp tiến trình cho agent, và một kiểm thử end-to-end cho agent.
+Chạy `yarn test` để xem số kiểm thử hiện tại, hoặc `yarn check` để chạy lint, kiểm thử và dựng client bundle cùng lúc. Các kiểm thử dịch vụ thực cục bộ có thể bỏ qua khi không có Redis/Postgres; CI đặt `REQUIRE_TCP_SERVICES=1`. Phạm vi TCP gồm kiểm thử đơn vị cho agent server và virtual socket, kiểm thử cấp tiến trình cho agent, kiểm thử end-to-end cho agent, cùng kiểm thử protocol-negative (`yarn test:protocol-negative`) và soak có giới hạn (`yarn test:soak`).
 
 ---
 
 ## CI
 
-Các kiểm thử tự động chạy trên Node.js 20, 22, và 24 với dịch vụ Redis và Postgres sẵn sàng cho kiểm thử tích hợp.
+CI chạy trên các push vào `main` và pull request nhắm tới `main`: lint cùng xác minh bundle độc lập, kiểm thử trên Node.js 20, 22, và 24 với dịch vụ Redis và Postgres sẵn sàng cho kiểm thử tích hợp, kiểm tra audit dependency/commit (`yarn npm audit --all` + kiểm tra commit-message), job Docker (dựng, health check, artifact routes, installer upgrade/rollback), và job installer. Workflow soak định kỳ (`.github/workflows/soak.yml`) chạy kiểm thử soak TCP agent có giới hạn hàng tuần và theo yêu cầu.
 
 ---
 

@@ -10,7 +10,7 @@ const guides = [
   read('docs/guide-external-app-to-tcp-services.md'),
   read('docs/guide-external-app-to-tcp-services.vi.md'),
 ];
-const multiHostGuides = [
+const legacyMultiHostPages = [
   read('docs/guide-multi-host-tcp-services.md'),
   read('docs/guide-multi-host-tcp-services.vi.md'),
 ];
@@ -65,7 +65,7 @@ test('English and Vietnamese references preserve mode-first navigation', () => {
 });
 
 test('multi-host guides document repeatable agents and limit scope', () => {
-  for (const guide of multiHostGuides) {
+  for (const guide of guides) {
     assert.doesNotMatch(guide, /clone (the )?repository/i);
     assert.match(guide, /setup-service-host\.sh/);
     assert.match(guide, /setup-application-host\.sh/);
@@ -77,6 +77,17 @@ test('multi-host guides document repeatable agents and limit scope', () => {
 });
 
 test('multi-host guides install one pinned script without a source checkout', () => {
-  assert.match(multiHostGuides[0], /raw\.githubusercontent\.com[^\n]*<release-tag>[^\n]*setup-service-host\.sh/);
-  assert.match(multiHostGuides[1], /raw\.githubusercontent\.com[^\n]*<release-tag>[^\n]*setup-service-host\.sh/);
+  assert.match(guides[0], /raw\.githubusercontent\.com[^\n]*<release-tag>[^\n]*setup-service-host\.sh/);
+  assert.match(guides[1], /raw\.githubusercontent\.com[^\n]*<release-tag>[^\n]*setup-service-host\.sh/);
+});
+
+test('legacy multi-host pages are command-free language redirects', () => {
+  assert.ok(legacyMultiHostPages[0].split('\n').length <= 15);
+  assert.ok(legacyMultiHostPages[1].split('\n').length <= 15);
+  assert.match(legacyMultiHostPages[0], /guide-external-app-to-tcp-services\.md/);
+  assert.match(legacyMultiHostPages[1], /guide-external-app-to-tcp-services\.vi\.md/);
+  for (const page of legacyMultiHostPages) {
+    assert.doesNotMatch(page, /```(?:bash|env)/);
+    assert.doesNotMatch(page, /TCP_AGENT_ALLOWED_PORTS=/);
+  }
 });

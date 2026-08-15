@@ -13,6 +13,11 @@ set -euo pipefail
 #       -> wait for readiness
 #       -> on failure, roll back to the previous release
 #
+# Rollback captures the running process's environment from /proc/$pid/environ
+# (Linux only).  On non-Linux platforms, set ALLOW_CODE_ONLY_ROLLBACK=1 to
+# roll back using the previous code with the current installer's runtime
+# configuration (does not restore the previous process environment).
+#
 # Releases live under $WORK_DIR/releases/release.<random>/, the active one is
 # symlinked as $WORK_DIR/current and the previous one as $WORK_DIR/previous.
 #
@@ -30,7 +35,6 @@ set -euo pipefail
 #   AGENT_BUNDLE_URL              override bundle URL (https only by default)
 #   AGENT_MANIFEST_URL            override manifest URL (https only by default)
 #   AGENT_BUNDLE_PATH             use a local bundle file instead of downloading
-#   AGENT_BUNDLE_REFRESH          force a fresh manifest/bundle fetch
 #   ALLOW_INSECURE_BUNDLE_URL=1   allow http:// artifact URLs (local dev only)
 #   ALLOW_FALLBACK_MANIFEST=1     write a fallback manifest if fetch fails
 #   ALLOW_REMOTE_AGENT_BIND=1     permit a non-loopback bind (firewall required)
@@ -38,6 +42,19 @@ set -euo pipefail
 #   SETUP_LOG_KEEP                rotated log files to keep (default 5)
 #   TUNNEL_READY_TIMEOUT_SECS     readiness timeout (default 20)
 #   TUNNEL_ROLLBACK_TIMEOUT_SECS  rollback readiness timeout (default 15)
+#   ALLOW_CODE_ONLY_ROLLBACK=1    allow proceeding when the previous runtime
+#                                 config cannot be captured (rollback uses
+#                                 previous code + current config instead)
+#
+# Rollback contract: an upgrade rolls back to the previous release (code) AND
+# the previous runtime config (deployment rollback). The previous config is
+# captured in memory from /proc/<old_pid>/environ before the old process is
+# stopped, so a bad credential or port change cannot break the rollback. If
+# the environment cannot be read, the installer refuses to stop the running
+# process unless ALLOW_CODE_ONLY_ROLLBACK=1 is set.
+#
+# Supported platform: Linux with GNU coreutils/findutils (find -printf,
+# sort -z, cut -z). On macOS install the GNU tools and put them on PATH.
 #
 # Exit codes: 0 success, nonzero on any failure (including a failed upgrade
 # that rolled back, so callers can tell the desired release did not land).
@@ -79,15 +96,54 @@ validate_server_host() {
   case "$SERVER_HOST" in
     *[!A-Za-z0-9.:\[\]-]*) die "SERVER_HOST contains invalid characters (hostname[:port] only): $SERVER_HOST" ;;
   esac
-  local port=""
+  local _nc="${SERVER_HOST//[^:]}"
+  if [ ${#_nc} -gt 1 ] && [ "${SERVER_HOST::1}" != "[" ]; then
+    die "SERVER_HOST has unbracketed multi-colon; use [bracketed] IPv6 form: $SERVER_HOST"
+  fi
   case "$SERVER_HOST" in
-    \[*\]:*) port="${SERVER_HOST##*]:}" ;;
-    *:*)     port="${SERVER_HOST##*:}" ;;
+    :*) die "SERVER_HOST has an empty host: $SERVER_HOST" ;;
   esac
+  case "$SERVER_HOST" in
+    *:) die "SERVER_HOST has an empty port: $SERVER_HOST" ;;
+  esac
+  local host="" port=""
+  case "$SERVER_HOST" in
+    \[*:*\]:*)
+      # IPv6 literal with port, e.g. [::1]:8443
+      host="${SERVER_HOST%%]:*}"
+      host="${host#\[}"
+      port="${SERVER_HOST##*]:}"
+      ;;
+    \[*:*\])
+      # Bare IPv6 literal, e.g. [::1]
+      host="$SERVER_HOST"
+      ;;
+    *:*)
+      host="${SERVER_HOST%%:*}"
+      port="${SERVER_HOST##*:}"
+      ;;
+    *)
+      host="$SERVER_HOST"
+      ;;
+  esac
+  [ -n "$host" ] || die "SERVER_HOST has an empty host: $SERVER_HOST"
   if [ -n "$port" ]; then
     [[ "$port" =~ ^[0-9]+$ ]] || die "SERVER_HOST has a malformed port: $SERVER_HOST"
     [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "SERVER_HOST port must be in 1..65535: $SERVER_HOST"
   fi
+}
+
+validate_numeric() {
+  local name="$1" value="$2" min="$3"
+  [[ "$value" =~ ^[0-9]+$ ]] || die "$name must be an integer >= $min, got '$value'"
+  [ "$value" -ge "$min" ] || die "$name must be >= $min, got '$value'"
+}
+
+validate_tuning() {
+  validate_numeric 'INSTALL_RELEASES_KEEP' "$INSTALL_RELEASES_KEEP" 2
+  validate_numeric 'SETUP_LOG_KEEP' "$SETUP_LOG_KEEP" 1
+  validate_numeric 'TUNNEL_READY_TIMEOUT_SECS' "$TUNNEL_READY_TIMEOUT_SECS" 1
+  validate_numeric 'TUNNEL_ROLLBACK_TIMEOUT_SECS' "$TUNNEL_ROLLBACK_TIMEOUT_SECS" 1
 }
 
 validate_install_uuid() {
@@ -108,6 +164,7 @@ validate_agent_ports() {
     [ -n "$port" ] || die "AGENT_PORTS contains an empty entry: '$raw'"
     [[ "$port" =~ ^[0-9]+$ ]] || die "AGENT_PORTS contains a non-numeric port: '$port'"
     [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "AGENT_PORTS port out of range (1..65535): '$port'"
+    port="$((10#$port))"
     for existing in "${ports[@]:-}"; do
       [ "$existing" != "$port" ] || die "AGENT_PORTS contains a duplicate port: '$port'"
     done
@@ -115,9 +172,11 @@ validate_agent_ports() {
   done
   AGENT_PORTS_CANON="$(IFS=','; echo "${ports[*]}")"
   AGENT_PORTS_ARRAY=("${ports[@]}")
-  local compact
-  compact="$(printf '%s' "$raw" | tr -d '[:space:]')"
-  [ "$AGENT_PORTS_CANON" = "$compact" ] || die "AGENT_PORTS has malformed separators: '$raw'"
+  local stripped
+  stripped="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  [[ "$stripped" != *,,* ]] || die "AGENT_PORTS has malformed separators: '$raw'"
+  [[ "${stripped:0:1}" != "," ]] || die "AGENT_PORTS has malformed separators: '$raw'"
+  [[ "${stripped: -1}" != "," ]] || die "AGENT_PORTS has malformed separators: '$raw'"
 }
 
 validate_bind_host() {
@@ -209,6 +268,79 @@ cleanup_on_exit() {
 }
 
 # ---------------------------------------------------------------------------
+# Signal-safe interrupt handling
+# ---------------------------------------------------------------------------
+
+rollback_after_interrupt() {
+  if [ "${ROLLBACK_IN_PROGRESS:-0}" = 1 ]; then
+    return 0
+  fi
+  ROLLBACK_IN_PROGRESS=1
+
+  warn "Interrupted during phase=$INSTALL_PHASE; attempting rollback..."
+
+  # Kill candidate if running
+  if [ -n "${ACTIVE_PID:-}" ] && [[ "$ACTIVE_PID" =~ ^[0-9]+$ ]] && kill -0 "$ACTIVE_PID" 2>/dev/null; then
+    kill "$ACTIVE_PID" 2>/dev/null || true
+    for ((i=0; i<10; i++)); do
+      kill -0 "$ACTIVE_PID" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$ACTIVE_PID" 2>/dev/null && kill -9 "$ACTIVE_PID" 2>/dev/null || true
+  fi
+  ACTIVE_PID=""
+  preserve_failed_log 2>/dev/null || true
+
+  # Restore previous symlink if we moved it
+  if [ -n "${OLD_CURRENT:-}" ] && [ -d "${OLD_CURRENT:-}" ]; then
+    activate_release "$OLD_CURRENT" "current" 2>/dev/null || true
+  fi
+  if [ -n "${PREVIOUS_BEFORE:-}" ] && [ -d "${PREVIOUS_BEFORE:-}" ]; then
+    activate_release "$PREVIOUS_BEFORE" "previous" 2>/dev/null || true
+  elif [ -n "${OLD_CURRENT:-}" ] && [ -d "${OLD_CURRENT:-}" ]; then
+    activate_release "$OLD_CURRENT" "previous" 2>/dev/null || true
+  else
+    rm -f "$WORK_DIR/previous" 2>/dev/null || true
+  fi
+
+  # Start previous process if we stopped it and captured config
+  local prev=""
+  if [ -L "$WORK_DIR/previous" ]; then
+    prev="$(readlink "$WORK_DIR/previous" 2>/dev/null || true)"
+  fi
+  if [ -n "$prev" ] && [ -d "$prev" ]; then
+    local rollback_pid
+    rollback_pid="$(start_process "$prev" previous 2>/dev/null)" || true
+    if [ -n "$rollback_pid" ]; then
+      info "Waiting for rollback readiness after interrupt (PID: $rollback_pid)..."
+      if wait_for_readiness "$rollback_pid" "$TUNNEL_ROLLBACK_TIMEOUT_SECS" 2>/dev/null; then
+        info "Rollback after interrupt succeeded"
+      else
+        warn "Rollback after interrupt: previous process did not become ready"
+        kill_candidate "$rollback_pid" 2>/dev/null || true
+        cleanup_stale_metadata "$rollback_pid" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  cleanup_on_exit
+}
+
+handle_interrupt() {
+  local sig="$1"
+
+  if [ "${ROLLBACK_IN_PROGRESS:-0}" = 1 ]; then
+    exit 130
+  fi
+
+  if [ "${TRANSACTION_DESTRUCTIVE:-0}" = 1 ]; then
+    rollback_after_interrupt || true
+  fi
+
+  exit 130
+}
+
+# ---------------------------------------------------------------------------
 # Artifact fetching
 # ---------------------------------------------------------------------------
 
@@ -293,32 +425,133 @@ is_expected_process() {
   fi
 }
 
-stop_old_process() {
+# Read the PID file, validate the process is alive, and verify it is the
+# managed process we expect.  Returns the verified PID on stdout, or
+# returns nothing if there is no valid managed process to operate on.
+resolve_running_managed_pid() {
+  local pid=""
+  [ -f "$WORK_DIR/$ROLE.pid" ] && pid="$(cat "$WORK_DIR/$ROLE.pid" 2>/dev/null || true)"
+  if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if ! kill -0 "$pid" 2>/dev/null; then
+    info "Removing stale $ROLE.pid for dead PID $pid"
+    rm -f "$WORK_DIR/$ROLE.pid"
+    return 0
+  fi
   local expected_js=""
   local cur; cur="$(current_release_path)"
   if [ -n "$cur" ] && [ -d "$cur" ]; then
     expected_js="$cur/$ROLE_JS"
   fi
-  if [ -f "$WORK_DIR/$ROLE.pid" ]; then
-    local pid; pid="$(cat "$WORK_DIR/$ROLE.pid" 2>/dev/null || true)"
-    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
-      if is_expected_process "$pid" "$expected_js"; then
-        info "Stopping existing $ROLE (PID: $pid)"
-        kill "$pid" 2>/dev/null || true
-        for ((i=0; i<20; i++)); do
-          kill -0 "$pid" 2>/dev/null || break
-          sleep 0.1
-        done
-        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-      else
-        die "PID $pid (from $WORK_DIR/$ROLE.pid) does not match the expected bundle ($expected_js or legacy $ROLE_JS); refusing to kill"
-      fi
-    elif [[ "$pid" =~ ^[0-9]+$ ]] && ! kill -0 "$pid" 2>/dev/null; then
-      info "Removing stale $ROLE.pid for dead PID $pid"
-    fi
-    rm -f "$WORK_DIR/$ROLE.pid"
+  if ! is_expected_process "$pid" "$expected_js"; then
+    die "PID $pid (from $WORK_DIR/$ROLE.pid) does not match the expected bundle ($expected_js or legacy $ROLE_JS); refusing to operate"
   fi
+  printf '%s' "$pid"
+}
+
+stop_old_process() {
+  local pid="${1:-}"
+  if [ -n "$pid" ]; then
+    info "Stopping existing $ROLE (PID: $pid)"
+    kill "$pid" 2>/dev/null || true
+    for ((i=0; i<20; i++)); do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+  fi
+  rm -f "$WORK_DIR/$ROLE.pid"
   rm -f "$WORK_DIR/$ROLE.ready"
+}
+
+cleanup_stale_metadata() {
+  local dead_pid="$1"
+  [[ "$dead_pid" =~ ^[0-9]+$ ]] || return 0
+  if [ -f "$WORK_DIR/$ROLE.pid" ]; then
+    local stored; stored="$(cat "$WORK_DIR/$ROLE.pid" 2>/dev/null || true)"
+    if [ "$stored" = "$dead_pid" ]; then
+      rm -f "$WORK_DIR/$ROLE.pid"
+    fi
+  fi
+  if [ -f "$WORK_DIR/$ROLE.ready" ]; then
+    local stored; stored="$(cat "$WORK_DIR/$ROLE.ready" 2>/dev/null || true)"
+    if [ "$stored" = "$dead_pid" ]; then
+      rm -f "$WORK_DIR/$ROLE.ready"
+    fi
+  fi
+}
+
+# Reset all OLD_* and OLD_*_SET variables from a previous capture attempt.
+reset_previous_config_state() {
+  unset OLD_TUNNEL_SERVER_URL OLD_TUNNEL_SERVER_URL_SET
+  unset OLD_AGENT_USERNAME OLD_AGENT_USERNAME_SET
+  unset OLD_AGENT_PASSWORD OLD_AGENT_PASSWORD_SET
+  unset OLD_AGENT_PORTS OLD_AGENT_PORTS_SET
+  unset OLD_AGENT_BIND_HOST OLD_AGENT_BIND_HOST_SET
+  unset OLD_WS_HIGH_WATER_BYTES OLD_WS_HIGH_WATER_BYTES_SET
+  unset OLD_AGENT_RECONNECT_DELAY_MS OLD_AGENT_RECONNECT_DELAY_MS_SET
+  unset OLD_VERBOSE OLD_VERBOSE_SET
+  unset OLD_LOG_FORMAT OLD_LOG_FORMAT_SET
+  unset PREVIOUS_CONFIG_CAPTURED
+  unset ROLLBACK_CONFIG_MODE
+}
+
+# Capture the previous runtime config atomically. Parses into local
+# CAPTURED_* variables first, validates required keys, and only commits
+# to OLD_* after full validation success. On failure no OLD_* state is
+# modified, preventing hybrid partial-capture rollback.
+capture_previous_config() {
+  local pid="${1:-}"
+  if [ -z "$pid" ]; then
+    return 0
+  fi
+  local source="${PREVIOUS_ENVIRON_SOURCE:-/proc/$pid/environ}"
+  if [ ! -r "$source" ]; then
+    error "Cannot read previous runtime environment from $source"
+    return 1
+  fi
+  local c_url="" c_username="" c_password="" c_ports="" c_bind_host=""
+  local c_ws_high="" c_reconnect="" c_verbose="" c_log_format=""
+  local f_url=0 f_username=0 f_password=0 f_ports=0 f_bind_host=0
+  local f_ws_high=0 f_reconnect=0 f_verbose=0 f_log_format=0
+  local entry
+  while IFS= read -r -d '' entry; do
+    case "$entry" in
+      TUNNEL_SERVER_URL=*)     c_url="${entry#TUNNEL_SERVER_URL=}"; f_url=1 ;;
+      AGENT_USERNAME=*)        c_username="${entry#AGENT_USERNAME=}"; f_username=1 ;;
+      AGENT_PASSWORD=*)        c_password="${entry#AGENT_PASSWORD=}"; f_password=1 ;;
+      AGENT_PORTS=*)           c_ports="${entry#AGENT_PORTS=}"; f_ports=1 ;;
+      AGENT_BIND_HOST=*)       c_bind_host="${entry#AGENT_BIND_HOST=}"; f_bind_host=1 ;;
+      WS_HIGH_WATER_BYTES=*)   c_ws_high="${entry#WS_HIGH_WATER_BYTES=}"; f_ws_high=1 ;;
+      AGENT_RECONNECT_DELAY_MS=*) c_reconnect="${entry#AGENT_RECONNECT_DELAY_MS=}"; f_reconnect=1 ;;
+      VERBOSE=*)               c_verbose="${entry#VERBOSE=}"; f_verbose=1 ;;
+      LOG_FORMAT=*)            c_log_format="${entry#LOG_FORMAT=}"; f_log_format=1 ;;
+    esac
+  done < "$source"
+  local missing=""
+  if [ "$f_url" = 0 ] || [ -z "$c_url" ]; then missing="$missing TUNNEL_SERVER_URL"; fi
+  if [ "$f_username" = 0 ] || [ -z "$c_username" ]; then missing="$missing AGENT_USERNAME"; fi
+  if [ "$f_password" = 0 ] || [ -z "$c_password" ]; then missing="$missing AGENT_PASSWORD"; fi
+  if [ "$f_ports" = 0 ] || [ -z "$c_ports" ]; then missing="$missing AGENT_PORTS"; fi
+  if [ "$f_bind_host" = 0 ] || [ -z "$c_bind_host" ]; then missing="$missing AGENT_BIND_HOST"; fi
+  if [ -n "$missing" ]; then
+    error "Previous environment missing required keys:${missing}"
+    return 1
+  fi
+  reset_previous_config_state
+  OLD_TUNNEL_SERVER_URL="$c_url"; OLD_TUNNEL_SERVER_URL_SET=1
+  OLD_AGENT_USERNAME="$c_username"; OLD_AGENT_USERNAME_SET=1
+  OLD_AGENT_PASSWORD="$c_password"; OLD_AGENT_PASSWORD_SET=1
+  OLD_AGENT_PORTS="$c_ports"; OLD_AGENT_PORTS_SET=1
+  OLD_AGENT_BIND_HOST="$c_bind_host"; OLD_AGENT_BIND_HOST_SET=1
+  if [ "$f_ws_high" = 1 ]; then OLD_WS_HIGH_WATER_BYTES="$c_ws_high"; OLD_WS_HIGH_WATER_BYTES_SET=1; fi
+  if [ "$f_reconnect" = 1 ]; then OLD_AGENT_RECONNECT_DELAY_MS="$c_reconnect"; OLD_AGENT_RECONNECT_DELAY_MS_SET=1; fi
+  if [ "$f_verbose" = 1 ]; then OLD_VERBOSE="$c_verbose"; OLD_VERBOSE_SET=1; fi
+  if [ "$f_log_format" = 1 ]; then OLD_LOG_FORMAT="$c_log_format"; OLD_LOG_FORMAT_SET=1; fi
+  PREVIOUS_CONFIG_CAPTURED=1
+  ROLLBACK_CONFIG_MODE=previous
+  return 0
 }
 
 kill_candidate() {
@@ -350,18 +583,52 @@ preserve_failed_log() {
 
 start_process() {
   local release_dir="$1"
+  local config_source="${2:-current}"
   rotate_log
   local log_file="$WORK_DIR/$ROLE.log"
   rm -f "$WORK_DIR/$ROLE.ready"
-  TUNNEL_SERVER_URL="wss://$SERVER_HOST/tcp" \
-  AGENT_USERNAME="$AGENT_USERNAME" \
-  AGENT_PASSWORD="$AGENT_PASSWORD" \
-  AGENT_PORTS="$AGENT_PORTS_CANON" \
-  AGENT_BIND_HOST="$AGENT_BIND_HOST" \
-  AGENT_READY_FILE="$WORK_DIR/$ROLE.ready" \
-  VERBOSE="${VERBOSE:-false}" \
-  LOG_FORMAT="${LOG_FORMAT:-text}" \
-    nohup node "$release_dir/$ROLE_JS" >"$log_file" 2>&1 &
+
+  local env_args=()
+  local effective_source="$config_source"
+  if [ "$config_source" = "previous" ]; then
+    case "${ROLLBACK_CONFIG_MODE:-current}" in
+      previous) effective_source="previous" ;;
+      current)  effective_source="current" ;;
+      *)        die "invalid rollback mode: $ROLLBACK_CONFIG_MODE" ;;
+    esac
+  fi
+  if [ "$effective_source" = "previous" ]; then
+    env_args+=("TUNNEL_SERVER_URL=$OLD_TUNNEL_SERVER_URL")
+    env_args+=("AGENT_USERNAME=$OLD_AGENT_USERNAME")
+    env_args+=("AGENT_PASSWORD=$OLD_AGENT_PASSWORD")
+    env_args+=("AGENT_PORTS=$OLD_AGENT_PORTS")
+    env_args+=("AGENT_BIND_HOST=$OLD_AGENT_BIND_HOST")
+    if [ "${OLD_WS_HIGH_WATER_BYTES_SET:-0}" = 1 ]; then
+      env_args+=("WS_HIGH_WATER_BYTES=$OLD_WS_HIGH_WATER_BYTES")
+    fi
+    if [ "${OLD_AGENT_RECONNECT_DELAY_MS_SET:-0}" = 1 ]; then
+      env_args+=("AGENT_RECONNECT_DELAY_MS=$OLD_AGENT_RECONNECT_DELAY_MS")
+    fi
+    if [ "${OLD_VERBOSE_SET:-0}" = 1 ]; then
+      env_args+=("VERBOSE=$OLD_VERBOSE")
+    fi
+    if [ "${OLD_LOG_FORMAT_SET:-0}" = 1 ]; then
+      env_args+=("LOG_FORMAT=$OLD_LOG_FORMAT")
+    fi
+  else
+    env_args+=("TUNNEL_SERVER_URL=wss://$SERVER_HOST/tcp")
+    env_args+=("AGENT_USERNAME=$AGENT_USERNAME")
+    env_args+=("AGENT_PASSWORD=$AGENT_PASSWORD")
+    env_args+=("AGENT_PORTS=$AGENT_PORTS_CANON")
+    env_args+=("AGENT_BIND_HOST=$AGENT_BIND_HOST")
+    env_args+=("WS_HIGH_WATER_BYTES=${WS_HIGH_WATER_BYTES:-1048576}")
+    env_args+=("AGENT_RECONNECT_DELAY_MS=${AGENT_RECONNECT_DELAY_MS:-3000}")
+    env_args+=("VERBOSE=${VERBOSE:-false}")
+    env_args+=("LOG_FORMAT=${LOG_FORMAT:-text}")
+  fi
+  env_args+=("AGENT_READY_FILE=$WORK_DIR/$ROLE.ready")
+
+  env -i "${env_args[@]}" PATH="$PATH" HOME="${HOME:-/root}" nohup node "$release_dir/$ROLE_JS" >"$log_file" 2>&1 &
   local pid=$!
   printf '%s\n' "$pid" > "$WORK_DIR/$ROLE.pid"
   chmod 600 "$WORK_DIR/$ROLE.pid" 2>/dev/null || true
@@ -425,12 +692,14 @@ rollback_to_previous() {
   activate_release "$prev" "current"
   if [ -n "$PREVIOUS_BEFORE" ] && [ -d "$PREVIOUS_BEFORE" ]; then
     activate_release "$PREVIOUS_BEFORE" "previous"
+  elif [ -n "$OLD_CURRENT" ] && [ -d "$OLD_CURRENT" ]; then
+    activate_release "$OLD_CURRENT" "previous"
   else
     rm -f "$WORK_DIR/previous"
   fi
 
   local rollback_pid
-  rollback_pid="$(start_process "$prev")"
+  rollback_pid="$(start_process "$prev" previous)"
   info "Waiting for rollback readiness (PID: $rollback_pid)..."
   if wait_for_readiness "$rollback_pid" "$TUNNEL_ROLLBACK_TIMEOUT_SECS"; then
     rm -rf "$failed_release"
@@ -439,6 +708,7 @@ rollback_to_previous() {
   fi
   error "Rollback failed: previous release did not become ready"
   kill_candidate "$rollback_pid"
+  cleanup_stale_metadata "$rollback_pid"
   return 2
 }
 
@@ -517,28 +787,30 @@ migrate_legacy_layout() {
 # ---------------------------------------------------------------------------
 
 prune_logs() {
-  local count=0 f
-  for f in $(ls -1dt "$WORK_DIR"/logs/$ROLE.*.log 2>/dev/null || true); do
+  local count=0
+  while IFS= read -r -d '' f; do
     count=$((count + 1))
     if [ "$count" -gt "$SETUP_LOG_KEEP" ]; then
-      rm -f "$f"
+      rm -f -- "$f"
     fi
-  done
+  done < <(find "$WORK_DIR/logs" -maxdepth 1 -type f -name "$ROLE.*.log" \
+           -printf '%T@\t%p\0' 2>/dev/null | sort -zrn -t $'\t' -k1,1 | cut -z -d $'\t' -f2-)
 }
 
 prune_releases() {
-  local cur prev count=0 d
+  local cur prev count=0
   cur="$(current_release_path)"
   prev="$(previous_release_path)"
-  for d in $(ls -1dt "$WORK_DIR"/releases/release.* 2>/dev/null || true); do
+  while IFS= read -r -d '' d; do
     [ -d "$d" ] || continue
     [ "$d" = "$cur" ] && continue
     [ "$d" = "$prev" ] && continue
     count=$((count + 1))
     if [ "$count" -gt $((INSTALL_RELEASES_KEEP - 2)) ]; then
-      rm -rf "$d"
+      rm -rf -- "$d"
     fi
-  done
+  done < <(find "$WORK_DIR/releases" -maxdepth 1 -type d -name 'release.*' \
+           -printf '%T@\t%p\0' 2>/dev/null | sort -zrn -t $'\t' -k1,1 | cut -z -d $'\t' -f2-)
 }
 
 # ---------------------------------------------------------------------------
@@ -547,6 +819,7 @@ prune_releases() {
 
 validate_server_host
 validate_install_uuid
+validate_tuning
 validate_agent_ports "$AGENT_PORTS_RAW"
 validate_bind_host
 require_tools
@@ -558,14 +831,22 @@ mkdir -p "$WORK_DIR/releases" "$WORK_DIR/logs"
 
 acquire_lock
 
+trap 'handle_interrupt INT' INT
+trap 'handle_interrupt TERM' TERM
+trap 'handle_interrupt HUP' HUP
+
 NEW_RELEASE_READY=false
 KEEP_FAILED_RELEASE=false
 ACTIVE_PID=""
 PREVIOUS_BEFORE=""
 LINK_DIRS=()
+INSTALL_PHASE="initial"
+TRANSACTION_DESTRUCTIVE=0
+ROLLBACK_IN_PROGRESS=0
 
 RELEASE_DIR="$(mktemp -d "$WORK_DIR/releases/release.XXXXXXXX")"
 info "Staging new release: $(basename "$RELEASE_DIR")"
+INSTALL_PHASE="staging"
 stage_release
 
 migrate_legacy_layout
@@ -573,17 +854,36 @@ migrate_legacy_layout
 PREVIOUS_BEFORE="$(previous_release_path)"
 OLD_CURRENT="$(current_release_path)"
 
-stop_old_process
+OLD_PID="$(resolve_running_managed_pid || true)"
+
+ROLLBACK_CONFIG_MODE=current
+reset_previous_config_state
+if ! capture_previous_config "$OLD_PID"; then
+  reset_previous_config_state
+  PREVIOUS_CONFIG_CAPTURED=0
+  ROLLBACK_CONFIG_MODE=current
+  if [ "${ALLOW_CODE_ONLY_ROLLBACK:-0}" = 1 ]; then
+    warn 'Could not capture previous runtime config; continuing with code-only rollback (ALLOW_CODE_ONLY_ROLLBACK=1)'
+  else
+    die 'Cannot capture the previous runtime config; refusing to stop the running agent (set ALLOW_CODE_ONLY_ROLLBACK=1 to allow code-only rollback)'
+  fi
+fi
+
+INSTALL_PHASE="old-stopped"
+TRANSACTION_DESTRUCTIVE=1
+stop_old_process "$OLD_PID"
 
 if [ -n "$OLD_CURRENT" ] && [ -d "$OLD_CURRENT" ]; then
   activate_release "$OLD_CURRENT" "previous"
   info "Saved previous release"
 fi
 
+INSTALL_PHASE="candidate-activated"
 activate_release "$RELEASE_DIR" "current"
 info "New release activated"
 
-AGENT_PID="$(start_process "$RELEASE_DIR")"
+INSTALL_PHASE="candidate-running"
+AGENT_PID="$(start_process "$RELEASE_DIR" current)"
 ACTIVE_PID="$AGENT_PID"
 info "Waiting for agent readiness (PID: $AGENT_PID)..."
 
@@ -593,6 +893,7 @@ wait_for_readiness "$AGENT_PID" "$TUNNEL_READY_TIMEOUT_SECS" || rc=$?
 if [ "$rc" -eq 0 ]; then
   ACTIVE_PID=""
   NEW_RELEASE_READY=true
+  INSTALL_PHASE="complete"
   prune_logs
   prune_releases
   info 'Connected. Applications may use the loopback service ports.'
@@ -620,6 +921,7 @@ fi
 kill_candidate "$AGENT_PID"
 preserve_failed_log
 
+INSTALL_PHASE="rollback"
 if rollback_to_previous "$RELEASE_DIR"; then
   die "Installation failed; rolled back to the previous release"
 fi

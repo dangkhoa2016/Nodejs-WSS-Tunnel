@@ -97,7 +97,51 @@ REDISCLI_AUTH='<redis-password>' redis-cli --user '<redis-user>' -h 127.0.0.1 -p
 PGPASSWORD='<password>' psql -h 127.0.0.1 -p 5432 -U '<postgres-role>' -d '<database>' -c 'SELECT 1'
 ```
 
-## 4. Thêm Computer C và các máy sau
+## 4. Cách hoạt động của installer
+
+Cả hai installer dùng chung mô hình transactional:
+
+- **Staging trước khi đổi phiên bản.** Script tải bundle và manifest
+  `*-package.json` đã ghim, kiểm tra bundle, rồi cài dependencies
+  (`npm install --omit=dev`) vào thư mục riêng
+  `~/.tunnel-client/releases/release.<random>` (hoặc `~/.tcp-agent/releases/...`).
+  Tiến trình đang chạy chỉ bị dừng sau khi bản mới đã staged hoàn tất.
+- **Activate nguyên tử.** `current` là symlink trỏ tới release đang hoạt động;
+  `previous` trỏ tới bản known-good cuối cùng dùng để rollback.
+- **Cổng readiness.** Sau khi activate, script đợi file `client.ready` /
+  `agent.ready` chứa PID mới. `agent.ready` chỉ được ghi sau khi agent **bind
+  mọi listener của `AGENT_PORTS` và mở WebSocket tới máy chủ**, nên việc bind
+  port thất bại không bao giờ được báo là cài thành công. `client.ready` được
+  ghi khi WebSocket đã xác thực tới `/tunnel` mở (client không bind listener
+  nào) và bị xóa khi ngắt kết nối hoặc dừng. Nếu tiến trình thoát, hết thời
+  gian, hoặc log `auth_failed` (sai credential), script giết candidate, kích
+  hoạt lại `previous` và xác minh lại, khôi phục cấu hình thời gian chạy trước
+  (thông tin đăng nhập, cổng và cài đặt dịch vụ được lưu từ tiến trình đang
+  chạy trước khi dừng), rồi thoát **nonzero** để tool tự động biết bản mới
+  chưa được áp dụng.
+- **An toàn tiến trình cũ.** `client.pid`/`agent.pid` cũ chỉ bị kill khi khớp
+  đúng tiến trình dự kiến. Tiến trình không liên quan được giữ nguyên và cài
+  đặt dừng lại.
+- **Chạy lại để nâng cấp.** Chạy lại script với cùng `INSTALL_UUID` sẽ nâng
+  cấp tại chỗ. Khi manifest đổi, dependencies được cài mới cho release đó.
+- **Logs.** Output hiện tại vào `client.log`/`agent.log`; log cũ được xoay vào
+  `logs/`. Candidate lỗi giữ lại `client.failed.*.log` (hoặc
+  `agent.failed.*.log`) để chẩn đoán.
+- **Khoá chống chạy song song.** File lock khiến installer thứ hai thoát ngay
+  với `Another installation is already running`.
+- **Migrate legacy.** Bản cài trước transactional (bundle nằm ở gốc thư mục
+  làm việc) được chuyển thành `releases/release.legacy.*` và dùng làm bản
+  rollback.
+
+Thêm vào đó, application host:
+
+- bắt buộc `AGENT_PORTS` (không có default) và kiểm tra từng cổng;
+- mặc định bind `127.0.0.1` (hoặc `::1`) và từ chối bind ngoài loopback trừ khi
+  đặt `ALLOW_REMOTE_AGENT_BIND=1`;
+- in lệnh `redis-cli`/`psql` với password được che thành
+  `<redis-password>`/`<password>`.
+
+## 5. Thêm Computer C và các máy sau
 
 Tải cùng phiên bản `setup-application-host.sh` đã ghim và lặp lại mục 3 trên C,
 D và mọi máy tiêu thụ. Tất cả dùng cùng `SERVER_HOST` và `INSTALL_UUID`. Server
@@ -111,14 +155,14 @@ redis://<redis-user>:<redis-password>@127.0.0.1:6379
 postgresql://<postgres-role>:<password>@127.0.0.1:5432/<database>
 ```
 
-## 5. Giới hạn khi có nhiều agent
+## 6. Giới hạn khi có nhiều agent
 
 - `TCP_AGENT_MAX_STREAMS_PER_AGENT` áp dụng độc lập cho từng agent.
 - `TCP_MAX_CONNECTIONS_PER_PORT` là giới hạn tổng mọi agent trên cổng đó.
 - Giới hạn kết nối Redis/PostgreSQL vẫn áp dụng sau giới hạn tunnel. Hãy định cỡ
   mọi lớp dựa trên tổng tải đo được.
 
-## 6. Phân quyền và thu hồi từng người dùng
+## 7. Phân quyền và thu hồi từng người dùng
 
 Credential transport hiện chưa phân biệt B với C. Tạo Redis ACL user và
 PostgreSQL role riêng cho từng người dùng, chỉ cấp command, key, schema, table
@@ -133,7 +177,7 @@ và thao tác cần thiết.
 Nếu secret agent dùng chung bị lộ, đổi nó trên server và mọi agent được phép.
 Phiên bản hiện tại chưa hỗ trợ thu hồi secret transport riêng từng agent.
 
-## 7. Chế độ trực tiếp
+## 8. Chế độ trực tiếp
 
 Chỉ dùng direct mode khi nền tảng forward đúng cổng TCP:
 
@@ -153,7 +197,7 @@ Listener direct là TCP thô nếu không có TCP TLS proxy riêng. Luôn giới
 firewall và `TCP_TUNNEL_ALLOWED_IPS`. Không có port remapping: dịch vụ trên A
 phải listen đúng cổng được yêu cầu.
 
-## 8. Checklist production
+## 9. Checklist production
 
 - [ ] Mọi máy dùng cùng hostname và UUID đã ghim.
 - [ ] `/tunnel` và `/tcp` dùng WSS với chứng chỉ hợp lệ.
@@ -162,7 +206,7 @@ phải listen đúng cổng được yêu cầu.
 - [ ] Giới hạn tổng và mỗi agent đủ cho tải dự kiến.
 - [ ] Đã thử xoay credential và thu hồi user database.
 
-## 9. Khắc phục sự cố
+## 10. Khắc phục sự cố
 
 | Triệu chứng | Kiểm tra |
 |---|---|

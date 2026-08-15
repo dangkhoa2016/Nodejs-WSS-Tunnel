@@ -18,6 +18,9 @@
     "check": "yarn lint && yarn test && yarn build:client"
   },
   "packageManager": "yarn@4.17.1",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "ws": "^8.21.3"
   },

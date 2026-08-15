@@ -1,8 +1,10 @@
-import { writeFileSync } from 'node:fs';
+import { renameSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import WebSocket from 'ws';
 
 import { logError, logStandard, logVerbose } from '../src/shared/logging.js';
+import { parseAgentPorts } from '../src/shared/port-parser.js';
+import { readInteger } from '../src/shared/runtime-config.js';
 import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/shared/protocol.js';
 
 if (process.env.NODE_ENV === 'development') {
@@ -50,19 +52,29 @@ const USERNAME = process.env.AGENT_USERNAME || process.env.TUNNEL_USERNAME || ''
 const PASSWORD = process.env.AGENT_PASSWORD || process.env.TUNNEL_PASSWORD || '';
 
 const BIND_HOST = process.env.AGENT_BIND_HOST || '127.0.0.1';
-const AGENT_PORTS = (process.env.AGENT_PORTS || '')
-  .split(',')
-  .map((s) => s.trim())
-  .filter(Boolean)
-  .map(Number)
-  .filter((n) => Number.isInteger(n) && n > 0);
 
-const WS_HIGH_WATER = Number(process.env.WS_HIGH_WATER_BYTES || 1 * 1024 * 1024);
+{
+  const loopback = BIND_HOST === '127.0.0.1' || BIND_HOST === '::1';
+  if (!loopback && process.env.ALLOW_REMOTE_AGENT_BIND !== '1') {
+    console.error('[tcp-agent] Refusing non-loopback AGENT_BIND_HOST without ALLOW_REMOTE_AGENT_BIND=1');
+    process.exit(1);
+  }
+}
+
+let AGENT_PORTS;
+try {
+  AGENT_PORTS = parseAgentPorts(process.env.AGENT_PORTS || '');
+} catch (err) {
+  console.error(`[tcp-agent] ${err.message}`);
+  process.exit(1);
+}
+
+const WS_HIGH_WATER = readInteger('WS_HIGH_WATER_BYTES', 1 * 1024 * 1024, { min: 1024 });
 const WS_LOW_WATER = Math.floor(WS_HIGH_WATER / 2);
 
-if (!SERVER_URL || !USERNAME || !PASSWORD || AGENT_PORTS.length === 0) {
+if (!SERVER_URL || !USERNAME || !PASSWORD) {
   console.error(
-    '[tcp-agent] TUNNEL_SERVER_URL, credentials (AGENT_USERNAME/AGENT_PASSWORD or TUNNEL_USERNAME/TUNNEL_PASSWORD), and AGENT_PORTS are required.',
+    '[tcp-agent] TUNNEL_SERVER_URL and credentials (AGENT_USERNAME/AGENT_PASSWORD or TUNNEL_USERNAME/TUNNEL_PASSWORD) are required.',
   );
   process.exit(1);
 }
@@ -73,7 +85,7 @@ if (!SERVER_URL || !USERNAME || !PASSWORD || AGENT_PORTS.length === 0) {
 
 let ws = null;
 let reconnectTimer = null;
-let reconnectDelay = Number(process.env.AGENT_RECONNECT_DELAY_MS || 1000);
+let reconnectDelay = readInteger('AGENT_RECONNECT_DELAY_MS', 1000, { min: 100 });
 let reconnectAttempt = 0;
 let authFailed = false;
 let shuttingDown = false;
@@ -85,8 +97,64 @@ const pendingConnects = [];
 
 const listeners = [];
 
+// Ports requested via AGENT_PORTS that must all be listening before the agent
+// may report ready.
+const requestedPorts = new Set(AGENT_PORTS);
+// Ports whose listener has actually emitted "listening".
+const listeningPorts = new Set();
+// True once every listener is up AND the WebSocket is open.
+let ready = false;
+
 function wsReady() {
   return ws && ws.readyState === WebSocket.OPEN;
+}
+
+function allListenersListening() {
+  for (const port of requestedPorts) {
+    if (!listeningPorts.has(port)) return false;
+  }
+  return true;
+}
+
+function writeReadyFile() {
+  const readyFile = process.env.AGENT_READY_FILE;
+  if (!readyFile) return;
+  const tmp = `${readyFile}.tmp`;
+  try {
+    writeFileSync(tmp, String(process.pid));
+    renameSync(tmp, readyFile);
+  } catch {
+    // non-fatal; installer will time out if readiness cannot be written
+  }
+}
+
+function removeReadyFile() {
+  const readyFile = process.env.AGENT_READY_FILE;
+  if (!readyFile) return;
+  try {
+    rmSync(readyFile, { force: true });
+    rmSync(`${readyFile}.tmp`, { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+// The agent is ready only when the WSS is authenticated/open AND every
+// requested local listener is actually listening. Ready is the single gate for
+// the AGENT_READY_FILE handshake the installer polls.
+function markReadyIfEligible() {
+  if (ready || shuttingDown) return;
+  if (!wsReady() || !allListenersListening()) return;
+  ready = true;
+  writeReadyFile();
+}
+
+// Invalidate readiness. The ready file must never outlive the state that made
+// it true: a WSS that is no longer open, a listener that stopped listening, or
+// a process that is shutting down all make the agent not ready.
+function clearReady() {
+  ready = false;
+  removeReadyFile();
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +205,29 @@ function createLocalListener(port) {
 
   server.on('error', (err) => {
     logError('agent', 'listener_error', { port, message: err.message });
+    if (!ready) {
+      // A listener that fails to bind before readiness is a fatal candidate
+      // startup failure: the installer must never see SUCCESS when a requested
+      // port is not actually listening.
+      clearReady();
+      shutdown(1);
+    } else {
+      // A listener failing after readiness must not leave a stale ready file.
+      clearReady();
+    }
+  });
+
+  server.on('close', () => {
+    // A listener that closed unexpectedly (outside an intentional shutdown)
+    // invalidates readiness: a requested port is no longer served.
+    listeningPorts.delete(port);
+    clearReady();
   });
 
   server.listen(port, BIND_HOST, () => {
     logStandard('agent', 'listening', { bind_host: BIND_HOST, port });
+    listeningPorts.add(port);
+    markReadyIfEligible();
   });
 
   listeners.push(server);
@@ -429,18 +516,13 @@ function connect() {
   ws.on('open', () => {
     logStandard('agent', 'connected');
     reconnectAttempt = 0;
-    reconnectDelay = Number(process.env.AGENT_RECONNECT_DELAY_MS || 1000);
+    reconnectDelay = readInteger('AGENT_RECONNECT_DELAY_MS', 1000, { min: 100 });
     authFailed = false;
 
     // Signal readiness for installer polling (process-local, not wire protocol).
-    const readyFile = process.env.AGENT_READY_FILE;
-    if (readyFile) {
-      try {
-        writeFileSync(readyFile, String(process.pid));
-      } catch {
-        // non-fatal; installer will time out if readiness cannot be written
-      }
-    }
+    // The agent is only ready once the WSS is open AND every requested local
+    // listener is actually listening.
+    markReadyIfEligible();
   });
 
   ws.on('message', (data) => {
@@ -449,6 +531,7 @@ function connect() {
 
   ws.on('close', (code, reason) => {
     logStandard('agent', 'disconnected', { code, reason: reason?.toString() || '' });
+    clearReady();
     cleanupAll();
     scheduleReconnect();
   });
@@ -491,11 +574,17 @@ function scheduleReconnect() {
 // Shutdown
 // ---------------------------------------------------------------------------
 
-function shutdown() {
+function shutdown(exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
 
+  // Signal handlers receive the signal name (e.g. 'SIGTERM') as their first
+  // argument; only numeric exit codes are valid for process.exit().
+  if (typeof exitCode !== 'number') exitCode = 0;
+
   logStandard('agent', 'shutdown');
+
+  clearReady();
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
 
@@ -517,7 +606,9 @@ function shutdown() {
     }
   }
 
-  setTimeout(() => process.exit(0), 50).unref();
+  // Keep the timer referenced so the exit code is honored even if all other
+  // handles have already been closed.
+  setTimeout(() => process.exit(exitCode), 50);
 }
 
 process.on('SIGTERM', shutdown);

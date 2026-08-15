@@ -473,7 +473,7 @@ test('T09 stale PID for an unrelated process is never killed', async (t) => {
 
   const result = await runScript(SCRIPT.service, serviceEnv(sandbox, server.port, { mockBin }));
   assert.notEqual(result.status, 0, 'installer must refuse to kill an unrelated process');
-  assert.match(result.stderr, /refusing to kill/);
+  assert.match(result.stderr, /refusing to operate/);
   assert.ok(isRunning(unrelated.pid), 'the unrelated process must still be alive');
   assert.ok(!fs.existsSync(path.join(workDir, 'current')), 'no release may be activated');
   const releases = fs.readdirSync(path.join(workDir, 'releases'));
@@ -792,6 +792,51 @@ test('T19 legacy layout is preserved as the rollback target before a new install
 });
 
 // ---------------------------------------------------------------------------
+// Work dir path with spaces
+// ---------------------------------------------------------------------------
+
+test('work dir with spaces survives upgrades and retention pruning', async (t) => {
+  const sandbox = fs.mkdtempSync('/tmp/mh-ws-path-');
+  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
+  const server = await createArtifactServer(fixturesFor('client', READY_BUNDLE));
+  const workDir = path.join(sandbox, 'tunnel client dir');
+  t.after(async () => {
+    killPidFile(path.join(workDir, 'client.pid'));
+    await server.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  const opts = {
+    mockBin,
+    CLIENT_DIR: workDir,
+    SETUP_LOG_KEEP: '1',
+    INSTALL_RELEASES_KEEP: '2',
+  };
+
+  for (let i = 0; i < 3; i++) {
+    const result = await runScript(SCRIPT.service, serviceEnv(sandbox, server.port, { ...opts }));
+    assert.equal(result.status, 0, `install #${i + 1} stderr:\n${result.stderr}`);
+  }
+
+  const pid = readTrim(path.join(workDir, 'client.pid'));
+  assert.equal(readTrim(path.join(workDir, 'client.ready')), pid);
+  assert.ok(isRunning(pid));
+
+  const logs = fs.readdirSync(path.join(workDir, 'logs'));
+  assert.equal(
+    logs.length,
+    1,
+    `retention must keep exactly SETUP_LOG_KEEP=1 rotated log under a spaces path, found: ${logs.join(', ')}`,
+  );
+  const releases = fs.readdirSync(path.join(workDir, 'releases'));
+  assert.equal(
+    releases.length,
+    2,
+    `retention must keep exactly INSTALL_RELEASES_KEEP=2 releases under a spaces path, found: ${releases.join(', ')}`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Config validation edge cases
 // ---------------------------------------------------------------------------
 
@@ -827,6 +872,24 @@ test('SERVER_HOST and INSTALL_UUID reject injection-shaped values', async (t) =>
   assert.ok(!fs.existsSync(workDir) || fs.readdirSync(workDir).length === 0, 'nothing may be installed');
 });
 
+test('SERVER_HOST rejects empty host or empty port forms', async (t) => {
+  const sandbox = fs.mkdtempSync('/tmp/mh-host-empty-');
+  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
+  const server = await createArtifactServer(fixturesFor('client', READY_BUNDLE));
+  const workDir = path.join(sandbox, '.tunnel-client');
+  t.after(async () => {
+    await server.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  for (const bad of ['host:', ':443']) {
+    const result = await runScript(SCRIPT.service, serviceEnv(sandbox, server.port, { mockBin, SERVER_HOST: bad }));
+    assert.notEqual(result.status, 0, `SERVER_HOST='${bad}' must be rejected`);
+    assert.match(result.stderr, /SERVER_HOST/);
+  }
+  assert.ok(!fs.existsSync(workDir) || fs.readdirSync(workDir).length === 0, 'nothing may be installed');
+});
+
 test('SERVER_HOST rejects unbracketed multi-colon (ambiguous IPv6)', async (t) => {
   const sandbox = fs.mkdtempSync('/tmp/mh-host-ipv6-');
   const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
@@ -840,7 +903,64 @@ test('SERVER_HOST rejects unbracketed multi-colon (ambiguous IPv6)', async (t) =
   for (const bad of ['::1', '2001:db8::1', 'fe80::1%eth0', 'foo:123:456']) {
     const result = await runScript(SCRIPT.service, serviceEnv(sandbox, server.port, { mockBin, SERVER_HOST: bad }));
     assert.notEqual(result.status, 0, `SERVER_HOST='${bad}' (unbracketed multi-colon) must be rejected`);
-    assert.match(result.stderr, /unbracketed multi-colon|SERVER_HOST/, `stderr for '${bad}' must mention rejection reason`);
+    assert.match(
+      result.stderr,
+      /unbracketed multi-colon|SERVER_HOST/,
+      `stderr for '${bad}' must mention rejection reason`,
+    );
   }
   assert.ok(!fs.existsSync(workDir) || fs.readdirSync(workDir).length === 0, 'nothing may be installed');
+});
+
+test('SERVER_HOST accepts valid hostname and IPv6 forms', async (t) => {
+  const sandbox = fs.mkdtempSync('/tmp/mh-host-valid-');
+  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
+  const server = await createArtifactServer(fixturesFor('client', READY_BUNDLE));
+  const workDir = path.join(sandbox, '.tunnel-client');
+  t.after(async () => {
+    killPidFile(path.join(workDir, 'client.pid'));
+    await server.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  for (const valid of ['example.com', 'example.com:443', '[::1]', '[::1]:8443']) {
+    const result = await runScript(SCRIPT.service, serviceEnv(sandbox, server.port, { mockBin, SERVER_HOST: valid }));
+    assert.equal(result.status, 0, `SERVER_HOST='${valid}' must pass validation (stderr:\n${result.stderr})`);
+  }
+  const pid = readTrim(path.join(workDir, 'client.pid'));
+  assert.equal(readTrim(path.join(workDir, 'client.ready')), pid, 'last install must be ready');
+  assert.ok(isRunning(pid));
+});
+
+test('numeric tuning settings reject malformed and out-of-range values', async (t) => {
+  const sandbox = fs.mkdtempSync('/tmp/mh-tuning-');
+  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
+  const server = await createArtifactServer(fixturesFor('client', READY_BUNDLE));
+  const agentServer = await createArtifactServer(fixturesFor('tcp-agent', READY_BUNDLE));
+  const workDir = path.join(sandbox, '.tunnel-client');
+  const agentWorkDir = path.join(sandbox, '.tcp-agent');
+  t.after(async () => {
+    await server.close();
+    await agentServer.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  const settings = [
+    'INSTALL_RELEASES_KEEP',
+    'SETUP_LOG_KEEP',
+    'TUNNEL_READY_TIMEOUT_SECS',
+    'TUNNEL_ROLLBACK_TIMEOUT_SECS',
+  ];
+  for (const bad of ['abc', '-1', '0', '1.5']) {
+    for (const key of settings) {
+      const svc = await runScript(SCRIPT.service, serviceEnv(sandbox, server.port, { mockBin, [key]: bad }));
+      assert.notEqual(svc.status, 0, `service: ${key}='${bad}' must be rejected`);
+      assert.match(svc.stderr, new RegExp(key), `service: error must mention ${key}`);
+      const agent = await runScript(SCRIPT.agent, agentEnv(sandbox, agentServer.port, { mockBin, [key]: bad }));
+      assert.notEqual(agent.status, 0, `agent: ${key}='${bad}' must be rejected`);
+      assert.match(agent.stderr, new RegExp(key), `agent: error must mention ${key}`);
+    }
+  }
+  assert.ok(!fs.existsSync(workDir) || fs.readdirSync(workDir).length === 0, 'service must not stage anything');
+  assert.ok(!fs.existsSync(agentWorkDir) || fs.readdirSync(agentWorkDir).length === 0, 'agent must not stage anything');
 });

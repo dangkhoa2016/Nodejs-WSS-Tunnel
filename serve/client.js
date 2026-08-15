@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { renameSync, rmSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ import WebSocket from 'ws';
 import { WsFrameWriter } from '../src/server/WsFrameWriter.js';
 import { logStandard, logVerbose } from '../src/shared/logging.js';
 import { FrameCodec, PROTO, sendFrame, sendJsonFrame } from '../src/shared/protocol.js';
+import { readInteger } from '../src/shared/runtime-config.js';
 import { sanitizeHeaders } from '../src/shared/utils.js';
 import { createTcpClientHandler } from '../src/tcp/TcpClientHandler.js';
 
@@ -54,13 +55,13 @@ const TARGET_ORIGIN = (() => {
   return /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
 })();
 
-const MAX_CONCURRENT_STREAMS = Number(process.env.MAX_CONCURRENT_STREAMS || 200);
-const STREAM_IDLE_TIMEOUT_MS = Number(process.env.STREAM_IDLE_TIMEOUT_MS || 120000);
-const _DRAIN_TIMEOUT_MS = Number(process.env.DRAIN_TIMEOUT_MS || 30000);
+const MAX_CONCURRENT_STREAMS = readInteger('MAX_CONCURRENT_STREAMS', 200, { min: 1 });
+const STREAM_IDLE_TIMEOUT_MS = readInteger('STREAM_IDLE_TIMEOUT_MS', 120000, { min: 0 });
+const _DRAIN_TIMEOUT_MS = readInteger('DRAIN_TIMEOUT_MS', 30000, { min: 0 });
 
-const WS_HIGH_WATER = Number(process.env.WS_HIGH_WATER_BYTES || 1 * 1024 * 1024);
-const MAX_FRAME_PAYLOAD = Number(process.env.MAX_FRAME_PAYLOAD_BYTES || 256 * 1024);
-const LOCAL_REQUEST_TIMEOUT_MS = Number(process.env.LOCAL_REQUEST_TIMEOUT_MS || 0);
+const WS_HIGH_WATER = readInteger('WS_HIGH_WATER_BYTES', 1024 * 1024, { min: 1024 });
+const MAX_FRAME_PAYLOAD = readInteger('MAX_FRAME_PAYLOAD_BYTES', 256 * 1024, { min: 1 });
+const LOCAL_REQUEST_TIMEOUT_MS = readInteger('LOCAL_REQUEST_TIMEOUT_MS', 0, { min: 0 });
 
 if (!SERVER_URL || !USERNAME || !PASSWORD) {
   console.error('[client] TUNNEL_SERVER_URL, TUNNEL_USERNAME, TUNNEL_PASSWORD are required.');
@@ -79,8 +80,47 @@ const TCP_CLIENT_ALLOWED_HOSTS = (process.env.TCP_CLIENT_ALLOWED_HOSTS || TCP_TU
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
-const TCP_CONNECT_TIMEOUT_MS = Number(process.env.TCP_CONNECT_TIMEOUT_MS || 10000);
+const TCP_CONNECT_TIMEOUT_MS = readInteger('TCP_CONNECT_TIMEOUT_MS', 10000, { min: 0 });
 const WS_LOW_WATER = Math.floor(WS_HIGH_WATER / 2);
+
+// ---------------------------------------------------------------------------
+// Readiness
+// ---------------------------------------------------------------------------
+
+function readyFilePath() {
+  return (
+    process.env.TUNNEL_READY_FILE ||
+    join(
+      process.env.TUNNEL_WORK_DIR || (process.env.HOME ? join(process.env.HOME, '.tunnel-client') : '.'),
+      'client.ready',
+    )
+  );
+}
+
+// The client is ready only while it holds an open WebSocket to the server's
+// /tunnel endpoint. The file is written atomically (temp + rename) so an
+// installer/status reader never sees partial content, and it is removed when
+// the connection closes or the process shuts down.
+function writeReadyFile() {
+  const readyFile = readyFilePath();
+  const tmp = `${readyFile}.tmp`;
+  try {
+    writeFileSync(tmp, String(process.pid));
+    renameSync(tmp, readyFile);
+  } catch {
+    // non-fatal; installer will time out if readiness cannot be written
+  }
+}
+
+function removeReadyFile() {
+  const readyFile = readyFilePath();
+  try {
+    rmSync(readyFile, { force: true });
+    rmSync(`${readyFile}.tmp`, { force: true });
+  } catch {
+    // ignore
+  }
+}
 
 // ---------------------------------------------------------------------------
 // TCP Client Handler
@@ -497,18 +537,8 @@ function connect() {
     reconnectAttempt = 0;
     authFailed = false;
 
-    // Signal readiness for installer polling
-    const readyFile =
-      process.env.TUNNEL_READY_FILE ||
-      join(
-        process.env.TUNNEL_WORK_DIR || (process.env.HOME ? join(process.env.HOME, '.tunnel-client') : '.'),
-        'client.ready',
-      );
-    try {
-      writeFileSync(readyFile, String(process.pid));
-    } catch {
-      // non-fatal; installer will time out if readiness cannot be written
-    }
+    // Signal readiness for installer polling (process-local, not wire protocol).
+    writeReadyFile();
 
     // Start heartbeat
     heartbeatInterval = setInterval(() => {
@@ -532,6 +562,8 @@ function connect() {
   ws.on('close', (code, reason) => {
     logStandard('client', 'disconnected', { code, reason: reason?.toString() || '' });
 
+    removeReadyFile();
+
     if (heartbeatInterval) {
       clearInterval(heartbeatInterval);
       heartbeatInterval = null;
@@ -545,6 +577,9 @@ function connect() {
     if (err.message === 'Unexpected server response: 401') {
       logStandard('client', 'auth_failed');
       authFailed = true;
+      // A connection that is not authenticated is not usable: never leave a
+      // stale ready file from a previous connection.
+      removeReadyFile();
       return;
     }
 
@@ -557,7 +592,7 @@ function connect() {
 }
 
 function scheduleReconnect() {
-  if (authFailed) return;
+  if (authFailed || shuttingDown) return;
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
 
@@ -580,6 +615,8 @@ function shutdown() {
   shuttingDown = true;
 
   logStandard('client', 'shutdown');
+
+  removeReadyFile();
 
   if (heartbeatInterval) {
     clearInterval(heartbeatInterval);

@@ -161,14 +161,19 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 │   │   ├── installer.test.js
 │   │   └── installer-e2e.test.js
 │   ├── scripts/             # Multi-host setup script tests
-│   │   └── multi-host-setup.test.js
+│   │   ├── multi-host-setup.test.js
+│   │   └── multi-host-installer.test.js
 │   ├── helpers/
 │   │   └── tcp-test-setup.js
 │   └── fixtures/
 │       ├── client-captures-env.js
 │       ├── client-exits.js
 │       ├── client-never-ready.js
-│       └── client-writes-ready.js
+│       ├── client-writes-ready.js
+│       ├── role-ready.js
+│       ├── role-exits.js
+│       ├── role-never-ready.js
+│       └── role-auth-failed.js
 ├── LICENSE
 ├── package.json
 ├── TESTING.md              # Detailed testing instructions (EN)
@@ -306,6 +311,8 @@ The Client (e.g., on Google Colab or local machine) connects to the Server via t
 > By default the server accepts **one** tunnel client at a time; set `MAX_TUNNEL_CLIENTS` to allow more. Clients beyond the limit are rejected with close code `1013`.
 
 **Requirements on the client machine:** `curl`, `node` (>= 18), `npm`, `mv` with GNU `-T` support
+
+The multi-host setup scripts (`setup-service-host.sh`, `setup-application-host.sh`) target **Linux with GNU coreutils/findutils** (`find -printf`, `sort -z`, `cut -z`). On macOS, install GNU tools (`brew install coreutils findutils`, then `alias mv=gmv`; `gfind`/`gsort`/`gcut` must precede the BSD variants on `PATH`) or run the manual install.
 
 > On macOS: install coreutils (`brew install coreutils`) for `gmv -T`, then `alias mv=gmv`.
 

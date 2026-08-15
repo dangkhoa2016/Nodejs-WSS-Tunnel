@@ -86,6 +86,16 @@ node --test $(find test -name '*.test.js')
   node --test test/installer/installer-e2e.test.js
   ```
 
+- **Kiểm thử hợp đồng tĩnh installer đa host**:
+  ```bash
+  node --test test/scripts/multi-host-setup.test.js
+  ```
+
+- **Kiểm thử tích hợp installer đa host** (mock `npm` và artifact server local, không cần Internet):
+  ```bash
+  node --test test/scripts/multi-host-installer.test.js
+  ```
+
 - **Kiểm thử TCP End-to-End**:
   ```bash
   node --test test/tcp/tcp-e2e.test.js
@@ -233,6 +243,22 @@ Kiểm thử E2E đầy đủ, build `dist/client.js` thật, chạy tunnel serv
 - **Cài đặt lần đầu**: Tải bundle, khởi chạy client, xác minh PID còn sống.
 - **Cài đặt nâng cấp**: Chạy lại installer cùng thư mục làm việc; xác minh PID thay đổi và symlink `previous` được tạo.
 - **Rollback**: Cài đặt bundle lỗi và xác minh installer quay về bản trước đó và tiếp tục phục vụ tunnel HTTP.
+
+### 17. `test/scripts/multi-host-installer.test.js` (Integration Tests)
+Kiểm thử tích hợp cho `scripts/setup-service-host.sh` và `scripts/setup-application-host.sh` dùng mock `npm` (ghi `node_modules/ws`) và artifact server HTTP local — không cần Internet:
+- **Cài đặt sạch**: một release đang hoạt động, symlink `current`, `pid`/`ready` khớp, file pid private, xoay log, dependencies theo release.
+- **Cô lập lỗi**: bundle lỗi cú pháp, download bị cắt giữa chừng, manifest 404 — tất cả đều giữ nguyên tiến trình cũ, không có file orphan/partial.
+- **Rollback**: tiến trình thoát và `auth_failed` đều khôi phục `previous`, thoát nonzero, và giữ lại `*.failed.*.log`.
+- **Làm mới dependency**: manifest đổi kích hoạt cài mới cho release đó; release 1 giữ `node_modules` riêng.
+- **An toàn tiến trình**: stale PID trỏ tới tiến trình không liên quan không bao giờ bị kill; lock chặn installer chạy song song; lock stale được khôi phục.
+- **Chính sách agent**: bind ngoài loopback bị từ chối nếu thiếu `ALLOW_REMOTE_AGENT_BIND=1`; `AGENT_PORTS` thiếu hoặc sai đều bị từ chối; credential không xuất hiện trong output.
+- **Migration**: layout cũ một bundle được lưu thành `releases/release.legacy.*` và dùng làm bản rollback.
+
+### 18. `test/scripts/multi-host-setup.test.js` (Static Contract Tests)
+Kiểm thử tĩnh hai installer đa host:
+- download artifact chỉ qua https, `ws ^8.21.3`, không `curl -k`, không secret ví dụ public.
+- luật kiểm tra `SERVER_HOST`/`INSTALL_UUID`/`AGENT_PORTS`, bind chỉ loopback, ready file + fast-fail `auth_failed`.
+- có mặt các helper transactional, install lock, và mô hình release `current`/`previous`.
 
 ---
 

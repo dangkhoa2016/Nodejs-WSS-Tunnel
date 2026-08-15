@@ -86,6 +86,16 @@ node --test $(find test -name '*.test.js')
   node --test test/installer/installer-e2e.test.js
   ```
 
+- **Multi-Host Installer Static Contract Tests**:
+  ```bash
+  node --test test/scripts/multi-host-setup.test.js
+  ```
+
+- **Multi-Host Installer Integration Tests** (mock npm and local artifact server, no Internet):
+  ```bash
+  node --test test/scripts/multi-host-installer.test.js
+  ```
+
 - **TCP End-to-End Tests**:
   ```bash
   node --test test/tcp/tcp-e2e.test.js
@@ -233,6 +243,22 @@ Full E2E test that builds a real `dist/client.js` bundle, runs the tunnel server
 - **First install**: Downloads the bundle, starts the client, verifies PID is alive.
 - **Upgrade install**: Runs installer again with the same work directory; verifies PID changes and `previous` symlink is created.
 - **Rollback**: Installs a broken client bundle and verifies the installer rolls back to the previous release and continues serving tunneled HTTP requests.
+
+### 17. `test/scripts/multi-host-installer.test.js` (Integration Tests)
+End-to-end tests for `scripts/setup-service-host.sh` and `scripts/setup-application-host.sh` using a mock `npm` (writes `node_modules/ws`) and a local HTTP artifact server — no Internet required:
+- **Clean installs**: single active release, `current` symlink, matching `pid`/`ready`, private pid file, log rotation, per-release dependencies.
+- **Failure isolation**: malformed bundle, bundle download cut short, and manifest 404 all leave the old process untouched with no orphan or partial files.
+- **Rollback**: runtime exit and `auth_failed` both restore `previous`, exit nonzero, and preserve a `*.failed.*.log`.
+- **Dependency refresh**: a changed manifest triggers a fresh install for that release; release 1 keeps its own `node_modules`.
+- **Process safety**: a stale PID pointing at an unrelated process is never killed; concurrent installers are rejected by the lock; stale locks are recovered.
+- **Agent policy**: non-loopback bind rejected without `ALLOW_REMOTE_AGENT_BIND=1`; malformed or missing `AGENT_PORTS` rejected; credentials never appear in output.
+- **Migration**: the legacy single-bundle layout is archived as `releases/release.legacy.*` and used as the rollback target.
+
+### 18. `test/scripts/multi-host-setup.test.js` (Static Contract Tests)
+Static assertions over the two multi-host installers:
+- https-only artifact downloads, `ws ^8.21.3`, no `curl -k`, no published example secrets.
+- `SERVER_HOST`/`INSTALL_UUID`/`AGENT_PORTS` validation rules, loopback-only bind, readiness file + `auth_failed` fast-fail.
+- Presence of transactional lifecycle helpers, the install lock, and the `current`/`previous` release model.
 
 ---
 

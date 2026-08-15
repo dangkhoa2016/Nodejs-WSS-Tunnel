@@ -280,6 +280,9 @@ test('removes failed release after rollback', async (t) => {
   assert.ok(fs.existsSync(firstRelease));
   const pidFile = path.join(workDir, 'client.pid');
   assert.ok(Number(fs.readFileSync(pidFile, 'utf8')) > 0);
+  try {
+    process.kill(Number(fs.readFileSync(pidFile, 'utf8').trim()));
+  } catch {}
 
   const workEntries = fs.readdirSync(workDir);
   const remnants = workEntries.filter(

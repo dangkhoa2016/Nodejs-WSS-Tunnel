@@ -161,14 +161,19 @@
 │   │   ├── installer.test.js
 │   │   └── installer-e2e.test.js
 │   ├── scripts/             # Kiểm thử script setup đa máy chủ
-│   │   └── multi-host-setup.test.js
+│   │   ├── multi-host-setup.test.js
+│   │   └── multi-host-installer.test.js
 │   ├── helpers/
 │   │   └── tcp-test-setup.js
 │   └── fixtures/
 │       ├── client-captures-env.js
 │       ├── client-exits.js
 │       ├── client-never-ready.js
-│       └── client-writes-ready.js
+│       ├── client-writes-ready.js
+│       ├── role-ready.js
+│       ├── role-exits.js
+│       ├── role-never-ready.js
+│       └── role-auth-failed.js
 ├── LICENSE
 ├── package.json
 ├── TESTING.md              # Hướng dẫn kiểm thử chi tiết (EN)
@@ -306,6 +311,8 @@ Client (ví dụ: trên Google Colab hoặc máy cục bộ) kết nối đến 
 > Mặc định máy chủ chỉ chấp nhận **một** tunnel client tại một thời điểm; đặt `MAX_TUNNEL_CLIENTS` để cho phép nhiều hơn. Client vượt quá giới hạn bị từ chối với mã đóng `1013`.
 
 **Yêu cầu trên máy client:** `curl`, `node` (>= 18), `npm`, `mv` hỗ trợ GNU `-T`
+
+Các script cài đặt nhiều máy (`setup-service-host.sh`, `setup-application-host.sh`) hướng tới **Linux với GNU coreutils/findutils** (`find -printf`, `sort -z`, `cut -z`). Trên macOS, hãy cài GNU tools (`brew install coreutils findutils`, rồi `alias mv=gmv`; `gfind`/`gsort`/`gcut` phải đứng trước các bản BSD trên `PATH`) hoặc cài đặt thủ công.
 
 > Trên macOS: cài coreutils (`brew install coreutils`) để có `gmv -T`, sau đó `alias mv=gmv`.
 

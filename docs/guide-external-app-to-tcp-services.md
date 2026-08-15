@@ -98,7 +98,47 @@ REDISCLI_AUTH='<redis-password>' redis-cli --user '<redis-user>' -h 127.0.0.1 -p
 PGPASSWORD='<password>' psql -h 127.0.0.1 -p 5432 -U '<postgres-role>' -d '<database>' -c 'SELECT 1'
 ```
 
-## 4. Add Computer C and later hosts
+## 4. How the installers work
+
+Both installers use the same transactional model:
+
+- **Staging before switchover.** The script downloads the bundle and the pinned
+  `*-package.json` manifest, validates the bundle, and installs dependencies
+  (`npm install --omit=dev`) into a unique directory under
+  `~/.tunnel-client/releases/release.<random>` (or `~/.tcp-agent/releases/...`).
+  The currently running process is only stopped after the new release is fully
+  staged.
+- **Atomic activation.** `current` is a symlink to the active release;
+  `previous` points at the last known-good release used for rollback.
+- **Readiness gate.** After activation the script waits for the
+  `client.ready` / `agent.ready` file to contain the new PID. If the process
+  exits, times out, or logs an `auth_failed` (wrong credentials), the script
+  kills the candidate, reactivates `previous`, verifies it, and exits
+  **nonzero** so an automation tool knows the new release did not land.
+- **Old process safety.** A stale `client.pid`/`agent.pid` is only ever killed
+  when it matches the expected process. An unrelated process is left alone and
+  the install aborts.
+- **Re-run to upgrade.** Running the same script again with the same
+  `INSTALL_UUID` upgrades in place. A manifest change triggers a fresh
+  dependency install for that release.
+- **Logs.** Live output goes to `client.log`/`agent.log`; older logs rotate
+  into `logs/`. A failed candidate keeps a `client.failed.*.log` (or
+  `agent.failed.*.log`) for diagnostics.
+- **Concurrency guard.** A lock file makes a second concurrent installer exit
+  immediately with `Another installation is already running`.
+- **Legacy migration.** A pre-transactional install (bundle in the work
+  directory root) is first archived as `releases/release.legacy.*` and used as
+  the rollback target.
+
+The application host additionally:
+
+- requires `AGENT_PORTS` (no built-in default) and validates each port;
+- defaults to binding `127.0.0.1` (or `::1`) and refuses a non-loopback bind
+  unless `ALLOW_REMOTE_AGENT_BIND=1` is set explicitly;
+- prints `redis-cli`/`psql` commands with the password redacted as
+  `<redis-password>`/`<password>`.
+
+## 5. Add Computer C and later hosts
 
 Download the same pinned `setup-application-host.sh` version and repeat section
 3 on C, D, and every consumer. All hosts use the same `SERVER_HOST` and
@@ -112,14 +152,14 @@ redis://<redis-user>:<redis-password>@127.0.0.1:6379
 postgresql://<postgres-role>:<password>@127.0.0.1:5432/<database>
 ```
 
-## 5. Limits across multiple agents
+## 6. Limits across multiple agents
 
 - `TCP_AGENT_MAX_STREAMS_PER_AGENT` applies independently to each agent.
 - `TCP_MAX_CONNECTIONS_PER_PORT` is aggregate across all agents for that port.
 - Redis/PostgreSQL connection limits apply after tunnel limits. Size every
   layer from measured aggregate traffic.
 
-## 6. Per-consumer authorization and revocation
+## 7. Per-consumer authorization and revocation
 
 Transport credentials cannot currently identify B separately from C. Create a
 Redis ACL user and PostgreSQL role for each consumer, granting only required
@@ -134,7 +174,7 @@ To revoke B without interrupting C:
 If the shared agent secret leaks, rotate it on the server and every authorized
 agent. Per-agent transport-secret revocation is not supported yet.
 
-## 7. Direct mode
+## 8. Direct mode
 
 Use direct mode only when the platform forwards the exact TCP port:
 
@@ -154,7 +194,7 @@ Direct listeners are raw TCP unless you deploy a separate TCP TLS proxy. Always
 restrict them with a firewall and `TCP_TUNNEL_ALLOWED_IPS`. There is no port
 remapping: the service on A must listen on the same requested port.
 
-## 8. Production checklist
+## 9. Production checklist
 
 - [ ] All hosts use the same hostname and pinned UUID.
 - [ ] `/tunnel` and `/tcp` use WSS with a valid certificate.
@@ -163,7 +203,7 @@ remapping: the service on A must listen on the same requested port.
 - [ ] Aggregate and per-agent limits cover expected concurrency.
 - [ ] Credential rotation and database-user revocation are tested.
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 | Symptom | Check |
 |---|---|

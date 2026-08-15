@@ -1,3 +1,4 @@
+import { writeFileSync } from 'node:fs';
 import net from 'node:net';
 import WebSocket from 'ws';
 
@@ -430,6 +431,16 @@ function connect() {
     reconnectAttempt = 0;
     reconnectDelay = Number(process.env.AGENT_RECONNECT_DELAY_MS || 1000);
     authFailed = false;
+
+    // Signal readiness for installer polling (process-local, not wire protocol).
+    const readyFile = process.env.AGENT_READY_FILE;
+    if (readyFile) {
+      try {
+        writeFileSync(readyFile, String(process.pid));
+      } catch {
+        // non-fatal; installer will time out if readiness cannot be written
+      }
+    }
   });
 
   ws.on('message', (data) => {

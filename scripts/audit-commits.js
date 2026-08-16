@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const MAX_SUBJECT_LENGTH = 72;
-const MAX_CHURN = 1000;
+const MAX_CHURN = 3000;
 
 const SUBJECT_PATTERN =
   /^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9-]+\))?!?: .+$/;

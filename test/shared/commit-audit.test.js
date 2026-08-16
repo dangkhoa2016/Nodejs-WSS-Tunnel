@@ -134,7 +134,7 @@ describe('auditRange integration', () => {
     commitAll(dir, 'Merge pull request #1 from evil/patch');
     writeFileSync(join(dir, 'prose.txt'), 'p\n');
     commitAll(dir, 'feat: prose body', 'This is prose and not a bullet.');
-    writeFileSync(join(dir, 'big.txt'), `${Array.from({ length: 1000 }, (_, i) => `line ${i}`).join('\n')}\n`);
+    writeFileSync(join(dir, 'big.txt'), `${Array.from({ length: 3001 }, (_, i) => `line ${i}`).join('\n')}\n`);
     commitAll(dir, 'feat: large churn');
     const head = git(dir, ['rev-parse', 'HEAD']);
     const shas = git(dir, ['rev-list', `${base}..${head}`])
@@ -156,7 +156,7 @@ describe('auditRange integration', () => {
     const proseViolation = result.violations.find((v) => v.startsWith(subjectOf.get('feat: prose body')));
     assert.match(proseViolation, /bullet or trailer/);
     const churnViolation = result.violations.find((v) => v.startsWith(subjectOf.get('feat: large churn')));
-    assert.match(churnViolation, /1000-line threshold/);
+    assert.match(churnViolation, /3000-line threshold/);
   });
 
   it('does not count binary file churn against the numeric threshold', () => {

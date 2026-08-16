@@ -27,7 +27,7 @@ jobs:
           SANDBOX=$(mktemp -d)
           cp dist/client.js "$SANDBOX/"
           cd "$SANDBOX"
-          echo '{"type":"module","dependencies":{"ws":"^8.21.1"}}' > package.json
+          echo '{"type":"module","dependencies":{"ws":"^8.21.3"}}' > package.json
           npm install --silent
           node --check client.js
           env -u TUNNEL_SERVER_URL -u TUNNEL_USERNAME -u TUNNEL_PASSWORD \
@@ -37,7 +37,7 @@ jobs:
           SANDBOX=$(mktemp -d)
           cp dist/tcp-agent.js "$SANDBOX/"
           cd "$SANDBOX"
-          echo '{"type":"module","dependencies":{"ws":"^8.21.1"}}' > package.json
+          echo '{"type":"module","dependencies":{"ws":"^8.21.3"}}' > package.json
           npm install --silent
           node --check tcp-agent.js
           env -u TUNNEL_SERVER_URL -u TUNNEL_USERNAME -u TUNNEL_PASSWORD -u AGENT_PORTS -u AGENT_USERNAME -u AGENT_PASSWORD \

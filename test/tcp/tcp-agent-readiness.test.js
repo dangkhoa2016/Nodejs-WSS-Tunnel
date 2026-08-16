@@ -239,4 +239,88 @@ describe('TCP agent readiness', () => {
       fs.rmSync(sandbox, { recursive: true, force: true });
     }
   });
+
+  it('R01+R04: WSS disconnect removes agent.ready and it stays gone through the reconnect window', {
+    timeout: 30000,
+  }, async () => {
+    const sandbox = fs.mkdtempSync('/tmp/agent-ready-r01-');
+    const portA = await findFreePort();
+    const readyFile = path.join(sandbox, 'agent.ready');
+    const mock = createMockWsServer();
+    const proc = spawnAgent({
+      wsPort: mock.port,
+      agentPorts: [portA],
+      readyFile,
+      env: { AGENT_RECONNECT_DELAY_MS: '1500' },
+    });
+    try {
+      await waitFor(() => fs.existsSync(readyFile));
+      assert.equal(fs.readFileSync(readyFile, 'utf8').trim(), String(proc.pid), 'ready file must contain the PID');
+
+      for (const client of [...mock.connections]) client.terminate();
+
+      await waitFor(() => !fs.existsSync(readyFile));
+      assert.equal(proc.exitCode, null, 'process must stay alive after a WSS disconnect');
+      await waitFor(() => mock.connections.size === 0);
+
+      const stillGoneAfterDelay = await (async () => {
+        await sleep(400);
+        return !fs.existsSync(readyFile);
+      })();
+      assert.equal(stillGoneAfterDelay, true, 'ready file must remain absent during the reconnect backoff window');
+    } finally {
+      await killAndWait(proc);
+      await mock.close();
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it('R02: reconnect recreates agent.ready with the same PID', { timeout: 30000 }, async () => {
+    const sandbox = fs.mkdtempSync('/tmp/agent-ready-r02-');
+    const portA = await findFreePort();
+    const readyFile = path.join(sandbox, 'agent.ready');
+    const mock = createMockWsServer();
+    const proc = spawnAgent({
+      wsPort: mock.port,
+      agentPorts: [portA],
+      readyFile,
+      env: { AGENT_RECONNECT_DELAY_MS: '500' },
+    });
+    try {
+      await waitFor(() => fs.existsSync(readyFile));
+
+      for (const client of [...mock.connections]) client.terminate();
+      await waitFor(() => !fs.existsSync(readyFile));
+
+      await waitFor(() => mock.connections.size === 1);
+      await waitFor(() => fs.existsSync(readyFile));
+
+      const pid = fs.readFileSync(readyFile, 'utf8').trim();
+      assert.equal(pid, String(proc.pid), 'recreated ready file must contain the same process PID');
+    } finally {
+      await killAndWait(proc);
+      await mock.close();
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it('R03: shutdown (SIGTERM) removes agent.ready and exits cleanly', { timeout: 30000 }, async () => {
+    const sandbox = fs.mkdtempSync('/tmp/agent-ready-r03-');
+    const portA = await findFreePort();
+    const readyFile = path.join(sandbox, 'agent.ready');
+    const mock = createMockWsServer();
+    const proc = spawnAgent({ wsPort: mock.port, agentPorts: [portA], readyFile });
+    try {
+      await waitFor(() => fs.existsSync(readyFile));
+
+      proc.kill('SIGTERM');
+      const exitCode = await waitForExit(proc, 5000);
+      assert.equal(exitCode, 0, 'agent must exit cleanly on SIGTERM');
+      assert.equal(fs.existsSync(readyFile), false, 'ready file must be removed on shutdown');
+    } finally {
+      await killAndWait(proc);
+      await mock.close();
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
 });

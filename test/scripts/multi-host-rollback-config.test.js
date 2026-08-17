@@ -69,6 +69,328 @@ setInterval(() => {}, 1000);
 
 const MANIFEST_B = JSON.stringify({ type: 'module', private: true, dependencies: { ws: '^8.21.3' } });
 
+// ---------------------------------------------------------------------------
+// Signal-race regressions (INT-06/07/08) — deterministic, state-based
+// synchronization. No fixed sleep decides a phase; every signal lands after a
+// filesystem marker proves the installer reached the intended window.
+//
+// SLOW_SIGTERM_BUNDLE records SIGTERM delivery in `<ready>.sigterm-seen` and
+// delays exit by 1s. It is used as the OLD release so the test can interrupt
+// the installer while the old process is still handling its own SIGTERM.
+// ---------------------------------------------------------------------------
+
+const SLOW_SIGTERM_BUNDLE = `
+import { writeFileSync } from 'node:fs';
+const readyFile = process.env.TUNNEL_READY_FILE || process.env.AGENT_READY_FILE;
+writeFileSync(readyFile, String(process.pid));
+process.on('SIGTERM', () => {
+  writeFileSync(readyFile + '.sigterm-seen', String(process.pid));
+  setTimeout(() => process.exit(0), 1000);
+});
+setInterval(() => {}, 1000);
+`;
+
+// ---------------------------------------------------------------------------
+// FIRST_RUN_SLOW_RESTART_BUNDLE becomes ready immediately on its first run
+// and deliberately slow (4s) on every later run, giving a rollback restart a
+// measurable not-yet-ready window.
+// ---------------------------------------------------------------------------
+
+const FIRST_RUN_SLOW_RESTART_BUNDLE = `
+import { existsSync, writeFileSync } from 'node:fs';
+const readyFile = process.env.TUNNEL_READY_FILE || process.env.AGENT_READY_FILE;
+const firstRunMarker = readyFile + '.first-run-complete';
+if (!existsSync(firstRunMarker)) {
+  writeFileSync(firstRunMarker, '1');
+  writeFileSync(readyFile, String(process.pid));
+} else {
+  setTimeout(() => {
+    writeFileSync(readyFile, String(process.pid));
+  }, 4000);
+}
+setInterval(() => {}, 1000);
+`;
+
+const RACE_ROLES = {
+  service: {
+    fixtureRole: 'client',
+    workDirName: '.tunnel-client',
+    pidFile: 'client.pid',
+    readyFile: 'client.ready',
+    passwordKey: 'TUNNEL_PASSWORD',
+    bundleUrlKey: 'CLIENT_BUNDLE_URL',
+  },
+  agent: {
+    fixtureRole: 'tcp-agent',
+    workDirName: '.tcp-agent',
+    pidFile: 'agent.pid',
+    readyFile: 'agent.ready',
+    passwordKey: 'AGENT_PASSWORD',
+    bundleUrlKey: 'AGENT_BUNDLE_URL',
+  },
+};
+
+async function setupSignalRaceTest(t, role, extraFixtures) {
+  const variant = RACE_ROLES[role];
+  const sandbox = fs.mkdtempSync(`/tmp/signal-race-${role}-`);
+  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
+  const server = await createArtifactServer({
+    ...fixturesFor(variant.fixtureRole, READY_BUNDLE),
+    ...extraFixtures,
+  });
+  const workDir = path.join(sandbox, variant.workDirName);
+  const pidFile = path.join(workDir, variant.pidFile);
+  const readyFile = path.join(workDir, variant.readyFile);
+  t.after(async () => {
+    killPidFile(pidFile);
+    await server.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+  const env = (overrides = {}) =>
+    role === 'service'
+      ? serviceEnv(sandbox, server.port, { mockBin, ...overrides })
+      : agentEnv(sandbox, server.port, { mockBin, ...overrides });
+  return { variant, server, workDir, pidFile, readyFile, env };
+}
+
+async function waitFor(predicate, label, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+function exitOf(child, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      resolve({ status: null });
+    }, timeoutMs);
+    child.on('exit', (code) => {
+      clearTimeout(timer);
+      resolve({ status: code });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// INT-06 — stopping-old race: SIGTERM arrives while the old process is still
+// handling its own SIGTERM. The installer must defer the interrupt until the
+// old process is gone, start no duplicate process while it is still alive,
+// and then roll back to the previous release.
+// ---------------------------------------------------------------------------
+
+async function runStoppingOldInterruptRace(t, role) {
+  const { variant, server, workDir, pidFile, readyFile, env } = await setupSignalRaceTest(t, role, {
+    '/slow-sigterm.js': SLOW_SIGTERM_BUNDLE,
+  });
+  const sigtermSeen = `${readyFile}.sigterm-seen`;
+
+  // Step 1: install the old release B from the slow-SIGTERM fixture.
+  const install1 = await runScript(
+    SCRIPT[role],
+    env({
+      [variant.passwordKey]: 'correct-password',
+      [variant.bundleUrlKey]: `http://127.0.0.1:${server.port}/slow-sigterm.js`,
+    }),
+  );
+  assert.equal(install1.status, 0, `install1 stderr:\n${install1.stderr}`);
+  const releaseB = fs.readlinkSync(path.join(workDir, 'current'));
+  const pidB = readTrim(pidFile);
+  assert.equal(readTrim(readyFile), pidB, 'old release must be ready');
+  assert.ok(isRunning(pidB), 'old release must be running');
+
+  // Step 2: start an upgrade whose candidate would be healthy if committed.
+  const child = spawn('bash', [SCRIPT[role]], {
+    cwd: ROOT,
+    env: env({ [variant.passwordKey]: 'correct-password' }),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  // Step 3: deterministic sync — wait until B received the installer's SIGTERM.
+  await waitFor(() => fs.existsSync(sigtermSeen), 'old-process SIGTERM delivery');
+
+  // Step 4: B must still be alive inside its slow SIGTERM handler window.
+  assert.ok(isRunning(pidB), 'old process must still be alive after receiving SIGTERM');
+
+  // Step 5: interrupt the installer inside the true stopping-old window.
+  child.kill('SIGTERM');
+
+  // Step 6: no duplicate or rollback process may start while B is still dying.
+  while (isRunning(pidB)) {
+    assert.equal(readTrim(pidFile), pidB, 'pid file must still name the old process while it dies');
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  const result = await exitOf(child, 30000);
+
+  // Step 7: final state — interrupted, rolled back to B, exactly one process.
+  assert.notEqual(result.status, 0, 'installer must exit nonzero on interrupt');
+  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), releaseB, 'current must be restored to B');
+  const rollbackPid = readTrim(pidFile);
+  assert.ok(rollbackPid && rollbackPid !== pidB, 'a fresh rollback process must own the pid file');
+  await waitFor(() => isRunning(rollbackPid), 'rollback process startup', 10000);
+  assert.equal(readTrim(readyFile), rollbackPid, 'ready file must name the rollback PID');
+}
+
+test('INT-06 service: SIGTERM while old process is still stopping defers and rolls back', async (t) => {
+  await runStoppingOldInterruptRace(t, 'service');
+});
+
+test('INT-06 agent: SIGTERM while old process is still stopping defers and rolls back', async (t) => {
+  await runStoppingOldInterruptRace(t, 'agent');
+});
+
+// ---------------------------------------------------------------------------
+// INT-07 — active-rollback race: SIGTERM arrives while the rollback process
+// has been started but is not yet ready. Recovery must be allowed to finish;
+// the accepted rollback process must survive the installer exit.
+// ---------------------------------------------------------------------------
+
+async function runActiveRollbackInterruptRace(t, role) {
+  const { variant, server, workDir, pidFile, readyFile, env } = await setupSignalRaceTest(t, role, {
+    '/restart-slow.js': FIRST_RUN_SLOW_RESTART_BUNDLE,
+    '/never-ready.js': NEVER_READY_BUNDLE,
+  });
+
+  // Step 1: install previous release B; its first run becomes ready immediately.
+  const install1 = await runScript(
+    SCRIPT[role],
+    env({
+      [variant.passwordKey]: 'correct-password',
+      [variant.bundleUrlKey]: `http://127.0.0.1:${server.port}/restart-slow.js`,
+    }),
+  );
+  assert.equal(install1.status, 0, `install1 stderr:\n${install1.stderr}`);
+  const releaseB = fs.readlinkSync(path.join(workDir, 'current'));
+  const pidB = readTrim(pidFile);
+  assert.equal(readTrim(readyFile), pidB, 'previous release must be ready');
+  assert.ok(isRunning(pidB), 'previous release must be running');
+
+  // Step 2: start an upgrade whose candidate exits immediately.
+  const child = spawn('bash', [SCRIPT[role]], {
+    cwd: ROOT,
+    env: env({
+      [variant.passwordKey]: 'correct-password',
+      [variant.bundleUrlKey]: `http://127.0.0.1:${server.port}/never-ready.js`,
+      TUNNEL_READY_TIMEOUT_SECS: '10',
+    }),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  // Step 3: capture the candidate PID once published.
+  await waitFor(() => {
+    const pid = readTrim(pidFile);
+    return pid !== '' && pid !== pidB;
+  }, 'candidate PID publication');
+  const candidatePid = readTrim(pidFile);
+
+  // Step 4: wait for the candidate to die and recovery to take ownership.
+  await waitFor(() => !isRunning(candidatePid), 'candidate death', 20000);
+
+  // Step 5: wait for the rollback PID to be published and alive.
+  let rollbackPid = '';
+  await waitFor(() => {
+    rollbackPid = readTrim(pidFile);
+    return rollbackPid !== '' && rollbackPid !== candidatePid && isRunning(rollbackPid);
+  }, 'rollback PID publication');
+
+  // Step 6: the rollback process must not be ready yet when the signal lands.
+  assert.notEqual(readTrim(readyFile), rollbackPid, 'rollback process must not be ready yet when the signal is sent');
+
+  // Step 7: interrupt while rollback is active but not yet ready.
+  child.kill('SIGTERM');
+
+  const result = await exitOf(child, 30000);
+
+  // Step 8: recovery must finish despite the deferred signal.
+  assert.notEqual(result.status, 0, 'installer must exit nonzero after interrupted recovery');
+  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), releaseB, 'current must be restored to B');
+  await waitFor(() => readTrim(readyFile) === rollbackPid, 'rollback readiness', 15000);
+  assert.ok(isRunning(rollbackPid), 'accepted rollback process must survive installer exit');
+  assert.ok(!isRunning(candidatePid), 'failed candidate must stay dead');
+}
+
+test('INT-07 service: SIGTERM during active not-yet-ready rollback lets recovery finish', async (t) => {
+  await runActiveRollbackInterruptRace(t, 'service');
+});
+
+test('INT-07 agent: SIGTERM during active not-yet-ready rollback lets recovery finish', async (t) => {
+  await runActiveRollbackInterruptRace(t, 'agent');
+});
+
+// ---------------------------------------------------------------------------
+// INT-08 — candidate-starting race: SIGTERM arrives while the installer is
+// paused inside candidate-starting, after candidate PID publication and
+// ownership but before the phase flips to candidate-running. The deferred
+// interrupt must be consumed immediately: the candidate is rolled back and
+// the installer exits nonzero instead of committing the transaction.
+// ---------------------------------------------------------------------------
+
+async function runCandidateStartingInterruptRace(t, role) {
+  const slowReady =
+    role === 'service' ? SLOW_READY_BUNDLE : SLOW_READY_BUNDLE.replace(/TUNNEL_READY_FILE/g, 'AGENT_READY_FILE');
+  const { variant, server, workDir, pidFile, readyFile, env } = await setupSignalRaceTest(t, role, {
+    '/slow-candidate.js': slowReady,
+  });
+  const startingMarker = path.join(path.dirname(workDir), 'candidate-starting.marker');
+  const startingContinue = path.join(path.dirname(workDir), 'candidate-starting.continue');
+
+  // Step 1: install previous release B (immediately ready).
+  const install1 = await runScript(SCRIPT[role], env({ [variant.passwordKey]: 'correct-password' }));
+  assert.equal(install1.status, 0, `install1 stderr:\n${install1.stderr}`);
+  const releaseB = fs.readlinkSync(path.join(workDir, 'current'));
+  const pidB = readTrim(pidFile);
+  assert.ok(isRunning(pidB), 'previous release must be running');
+
+  // Step 2: upgrade with a candidate that stays unready well past the signal.
+  const child = spawn('bash', [SCRIPT[role]], {
+    cwd: ROOT,
+    env: env({
+      [variant.passwordKey]: 'correct-password',
+      [variant.bundleUrlKey]: `http://127.0.0.1:${server.port}/slow-candidate.js`,
+      TUNNEL_READY_TIMEOUT_SECS: '30',
+      TEST_CANDIDATE_STARTING_MARKER: startingMarker,
+      TEST_CANDIDATE_STARTING_CONTINUE: startingContinue,
+    }),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  // Step 3: deterministic sync — the installer writes the marker only after
+  // publishing the candidate PID and ownership, while still inside
+  // candidate-starting.
+  await waitFor(() => fs.existsSync(startingMarker), 'candidate-starting marker');
+  const candidatePid = readTrim(pidFile);
+  assert.ok(candidatePid && candidatePid !== pidB, 'candidate PID must be published');
+  assert.ok(isRunning(candidatePid), 'candidate must be alive when the signal lands');
+
+  // Step 4: interrupt while provably still in candidate-starting, then let
+  // the installer proceed into candidate-running.
+  child.kill('SIGTERM');
+  fs.writeFileSync(startingContinue, '1');
+
+  const result = await exitOf(child, 30000);
+
+  // Step 5: pending interrupt must be consumed before readiness: rollback.
+  assert.notEqual(result.status, 0, 'deferred interrupt must abort the install');
+  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), releaseB, 'current must be restored to B');
+  assert.ok(!isRunning(candidatePid), 'candidate must be killed by the interrupt rollback');
+  const rollbackPid = readTrim(pidFile);
+  assert.ok(rollbackPid && rollbackPid !== candidatePid, 'rollback process must own the pid file');
+  await waitFor(() => readTrim(readyFile) === rollbackPid, 'rollback readiness', 15000);
+  assert.ok(isRunning(rollbackPid), 'restored process must survive installer exit');
+}
+
+test('INT-08 service: SIGTERM inside candidate-starting consumes the pending interrupt', async (t) => {
+  await runCandidateStartingInterruptRace(t, 'service');
+});
+
+test('INT-08 agent: SIGTERM inside candidate-starting consumes the pending interrupt', async (t) => {
+  await runCandidateStartingInterruptRace(t, 'agent');
+});
+
 function isRunning(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return false;
@@ -531,7 +853,7 @@ test('RC01 env var present in old process is preserved on rollback', async (t) =
   );
 
   // Candidate uses wrong password → fails → triggers rollback
-  const install2 = await runScript(
+  const _install2 = await runScript(
     SCRIPT.service,
     serviceEnv(sandbox, server.port, {
       mockBin,
@@ -548,17 +870,18 @@ test('RC01 env var present in old process is preserved on rollback', async (t) =
   try {
     const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
     const envVars = Object.fromEntries(
-      environ.split('\0').filter(Boolean).map((entry) => {
-        const idx = entry.indexOf('=');
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      }),
+      environ
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf('=');
+          return [entry.slice(0, idx), entry.slice(idx + 1)];
+        }),
     );
 
     // Must have old values
-    assert.equal(envVars['TUNNEL_SERVER_URL'], 'ws://old:9999/tcp',
-      'TUNNEL_SERVER_URL must be the old value');
-    assert.equal(envVars['TUNNEL_USERNAME'], 'olduser',
-      'TUNNEL_USERNAME must be the old value');
+    assert.equal(envVars.TUNNEL_SERVER_URL, 'ws://old:9999/tcp', 'TUNNEL_SERVER_URL must be the old value');
+    assert.equal(envVars.TUNNEL_USERNAME, 'olduser', 'TUNNEL_USERNAME must be the old value');
   } catch (err) {
     if (err.code === 'ENOENT') {
       t.skip('/proc not available, skipping environ assertions');
@@ -590,7 +913,7 @@ test('RC02 env var present in old process is preserved on rollback (service)', a
   );
   assert.equal(install1.status, 0, `install1 stderr:\n${install1.stderr}`);
 
-  const pid1 = readTrim(path.join(workDir, 'client.pid'));
+  const _pid1 = readTrim(path.join(workDir, 'client.pid'));
 
   // Fake previous environ with old TUNNEL_USERNAME
   const envFile = path.join(sandbox, 'fake-environ');
@@ -600,7 +923,7 @@ test('RC02 env var present in old process is preserved on rollback (service)', a
   );
 
   // Candidate uses wrong password → fails → triggers rollback
-  const install2 = await runScript(
+  const _install2 = await runScript(
     SCRIPT.service,
     serviceEnv(sandbox, server.port, {
       mockBin,
@@ -617,15 +940,17 @@ test('RC02 env var present in old process is preserved on rollback (service)', a
   try {
     const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
     const envVars = Object.fromEntries(
-      environ.split('\0').filter(Boolean).map((entry) => {
-        const idx = entry.indexOf('=');
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      }),
+      environ
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf('=');
+          return [entry.slice(0, idx), entry.slice(idx + 1)];
+        }),
     );
 
     // Must have old TUNNEL_USERNAME
-    assert.equal(envVars['TUNNEL_USERNAME'], 'olduser',
-      'TUNNEL_USERNAME must be the old value');
+    assert.equal(envVars.TUNNEL_USERNAME, 'olduser', 'TUNNEL_USERNAME must be the old value');
   } catch (err) {
     if (err.code === 'ENOENT') {
       t.skip('/proc not available, skipping environ assertions');
@@ -707,95 +1032,17 @@ test('RC04 stale PID metadata cleaned after rollback failure', async (t) => {
   assert.notEqual(install2.status, 0, 'must fail because old password is wrong');
 
   // PID file must not exist (not just != old PID)
-  assert.equal(fs.existsSync(path.join(workDir, 'client.pid')), false,
-    'client.pid must be absent after rollback failure');
+  assert.equal(
+    fs.existsSync(path.join(workDir, 'client.pid')),
+    false,
+    'client.pid must be absent after rollback failure',
+  );
   // Ready file must not exist
-  assert.equal(fs.existsSync(path.join(workDir, 'client.ready')), false,
-    'client.ready must be absent after rollback failure');
-});
-
-// ---------------------------------------------------------------------------
-// RA01 — optional env absent in old process remains absent after rollback
-// ---------------------------------------------------------------------------
-
-test('RA01 agent: optional env absent in old process remains absent after rollback', async (t) => {
-  const sandbox = fs.mkdtempSync('/tmp/ra01-absent-');
-  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
-  const server = await createArtifactServer(fixturesFor('tcp-agent', CREDENTIAL_AGENT_BUNDLE));
-  const workDir = path.join(sandbox, '.tcp-agent');
-  t.after(async () => {
-    killPidFile(path.join(workDir, 'agent.pid'));
-    await server.close();
-    fs.rmSync(sandbox, { recursive: true, force: true });
-  });
-
-  // Install with correct password — succeeds
-  const install1 = await runScript(
-    SCRIPT.agent,
-    agentEnv(sandbox, server.port, { mockBin, AGENT_PASSWORD: 'correct-password' }),
+  assert.equal(
+    fs.existsSync(path.join(workDir, 'client.ready')),
+    false,
+    'client.ready must be absent after rollback failure',
   );
-  assert.equal(install1.status, 0, `install1 stderr:\n${install1.stderr}`);
-  const pid1 = readTrim(path.join(workDir, 'agent.pid'));
-  assert.ok(isRunning(pid1), 'first install must be running');
-
-  // Fake previous environ: required keys present, optional keys ABSENT
-  const envFile = path.join(sandbox, 'fake-environ');
-  const environData = [
-    'TUNNEL_SERVER_URL=ws://old-host:9999/tcp',
-    'AGENT_USERNAME=olduser',
-    'AGENT_PASSWORD=correct-password',
-    'AGENT_PORTS=6379',
-    'AGENT_BIND_HOST=127.0.0.1',
-  ].join('\0') + '\0';
-  fs.writeFileSync(envFile, environData);
-
-  // Install with wrong password — candidate fails, triggers rollback
-  const install2 = await runScript(
-    SCRIPT.agent,
-    agentEnv(sandbox, server.port, {
-      mockBin,
-      PREVIOUS_ENVIRON_SOURCE: envFile,
-      AGENT_PASSWORD: 'wrong-password',
-      WS_HIGH_WATER_BYTES: '2000000',
-      AGENT_RECONNECT_DELAY_MS: '5000',
-    }),
-  );
-
-  // Rollback should succeed (old password is correct)
-  // The installer may exit 0 (rollback succeeded) or we check the process
-  const pid2 = readTrim(path.join(workDir, 'agent.pid'));
-  assert.ok(pid2, 'PID file must exist after rollback');
-  assert.ok(isRunning(pid2), 'rollback process must be running');
-
-  // Read rollback process environment from /proc
-  try {
-    const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
-    const envVars = Object.fromEntries(
-      environ.split('\0').filter(Boolean).map((entry) => {
-        const idx = entry.indexOf('=');
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      }),
-    );
-
-    // Optional keys must NOT be present in rollback process env
-    assert.equal(envVars['WS_HIGH_WATER_BYTES'], undefined,
-      'WS_HIGH_WATER_BYTES must be absent from rollback process env');
-    assert.equal(envVars['AGENT_RECONNECT_DELAY_MS'], undefined,
-      'AGENT_RECONNECT_DELAY_MS must be absent from rollback process env');
-
-    // Required keys must be present
-    assert.equal(envVars['TUNNEL_SERVER_URL'], 'ws://old-host:9999/tcp',
-      'TUNNEL_SERVER_URL must be the old value');
-    assert.equal(envVars['AGENT_PASSWORD'], 'correct-password',
-      'AGENT_PASSWORD must be the old value');
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      // /proc may not be available (non-Linux) — skip env assertions
-      t.skip('/proc not available, skipping environ assertions');
-    } else {
-      throw err;
-    }
-  }
 });
 
 // ---------------------------------------------------------------------------
@@ -808,7 +1055,7 @@ test('RC-HYBRID-01 code-only rollback uses current config, not partial old', asy
   // Serve both the credential-check bundle and the never-ready bundle
   const server = await createArtifactServer({
     ...fixturesFor('client', CREDENTIAL_CLIENT_BUNDLE),
-    [`/never-ready-client.js`]: NEVER_READY_BUNDLE,
+    '/never-ready-client.js': NEVER_READY_BUNDLE,
   });
   const workDir = path.join(sandbox, '.tunnel-client');
   t.after(async () => {
@@ -828,10 +1075,7 @@ test('RC-HYBRID-01 code-only rollback uses current config, not partial old', asy
 
   // Fake previous environ: only TUNNEL_SERVER_URL + TUNNEL_USERNAME (missing required password)
   const envFile = path.join(sandbox, 'fake-environ');
-  const environData = [
-    'TUNNEL_SERVER_URL=ws://old-host:9999/tcp',
-    'TUNNEL_USERNAME=olduser',
-  ].join('\0') + '\0';
+  const environData = `${['TUNNEL_SERVER_URL=ws://old-host:9999/tcp', 'TUNNEL_USERNAME=olduser'].join('\0')}\0`;
   fs.writeFileSync(envFile, environData);
 
   // Candidate uses NEVER_READY_BUNDLE (not credential-based failure) +
@@ -839,7 +1083,7 @@ test('RC-HYBRID-01 code-only rollback uses current config, not partial old', asy
   // Capture fails (missing required keys), but code-only rollback is allowed.
   // Candidate fails (never ready), then rollback starts previous code with
   // CURRENT config (current password), which succeeds.
-  const install2 = await runScript(
+  const _install2 = await runScript(
     SCRIPT.service,
     serviceEnv(sandbox, server.port, {
       mockBin,
@@ -869,21 +1113,25 @@ test('RC-HYBRID-01 code-only rollback uses current config, not partial old', asy
   try {
     const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
     const envVars = Object.fromEntries(
-      environ.split('\0').filter(Boolean).map((entry) => {
-        const idx = entry.indexOf('=');
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      }),
+      environ
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf('=');
+          return [entry.slice(0, idx), entry.slice(idx + 1)];
+        }),
     );
 
     // P2-1: Must use CURRENT config, not old partial values
-    assert.equal(envVars['TUNNEL_PASSWORD'], 'correct-password',
-      'TUNNEL_PASSWORD must be the current valid value');
-    assert.equal(envVars['TUNNEL_USERNAME'], 'admin',
-      'TUNNEL_USERNAME must be the current invocation value, not the old partial value');
+    assert.equal(envVars.TUNNEL_PASSWORD, 'correct-password', 'TUNNEL_PASSWORD must be the current valid value');
+    assert.equal(
+      envVars.TUNNEL_USERNAME,
+      'admin',
+      'TUNNEL_USERNAME must be the current invocation value, not the old partial value',
+    );
     // TUNNEL_SERVER_URL: current serviceEnv doesn't set this, so it must NOT
     // appear with the old partial value
-    assert.ok(!envVars['TUNNEL_SERVER_URL']?.includes('old-host'),
-      'TUNNEL_SERVER_URL must NOT be the partial old value');
+    assert.ok(!envVars.TUNNEL_SERVER_URL?.includes('old-host'), 'TUNNEL_SERVER_URL must NOT be the partial old value');
   } catch (err) {
     if (err.code === 'ENOENT') {
       t.skip('/proc not available, skipping environ assertions');
@@ -920,16 +1168,16 @@ test('RS01 service: optional env absent in old process remains absent after roll
 
   // Fake previous environ: required keys present, optional keys ABSENT
   const envFile = path.join(sandbox, 'fake-environ');
-  const environData = [
+  const environData = `${[
     'TUNNEL_SERVER_URL=ws://old-host:9999/tcp',
     'TUNNEL_USERNAME=olduser',
     'TUNNEL_PASSWORD=correct-password',
     'TCP_TUNNEL_HOST=127.0.0.1',
-  ].join('\0') + '\0';
+  ].join('\0')}\0`;
   fs.writeFileSync(envFile, environData);
 
   // Candidate sets optional fields + wrong password → fails → rollback
-  const install2 = await runScript(
+  const _install2 = await runScript(
     SCRIPT.service,
     serviceEnv(sandbox, server.port, {
       mockBin,
@@ -954,30 +1202,35 @@ test('RS01 service: optional env absent in old process remains absent after roll
   try {
     const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
     const envVars = Object.fromEntries(
-      environ.split('\0').filter(Boolean).map((entry) => {
-        const idx = entry.indexOf('=');
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      }),
+      environ
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf('=');
+          return [entry.slice(0, idx), entry.slice(idx + 1)];
+        }),
     );
 
     // Optional keys must NOT be present in rollback process env
     const optionalFields = [
-      'TARGET_ORIGIN', 'MAX_CONCURRENT_STREAMS', 'STREAM_IDLE_TIMEOUT_MS',
-      'WS_HIGH_WATER_BYTES', 'MAX_FRAME_PAYLOAD_BYTES', 'LOCAL_REQUEST_TIMEOUT_MS',
-      'TCP_CONNECT_TIMEOUT_MS', 'VERBOSE', 'LOG_FORMAT',
+      'TARGET_ORIGIN',
+      'MAX_CONCURRENT_STREAMS',
+      'STREAM_IDLE_TIMEOUT_MS',
+      'WS_HIGH_WATER_BYTES',
+      'MAX_FRAME_PAYLOAD_BYTES',
+      'LOCAL_REQUEST_TIMEOUT_MS',
+      'TCP_CONNECT_TIMEOUT_MS',
+      'VERBOSE',
+      'LOG_FORMAT',
     ];
     for (const field of optionalFields) {
-      assert.equal(envVars[field], undefined,
-        `${field} must be absent from rollback process env (was absent in old)`);
+      assert.equal(envVars[field], undefined, `${field} must be absent from rollback process env (was absent in old)`);
     }
 
     // Required keys must be present with old values
-    assert.equal(envVars['TUNNEL_SERVER_URL'], 'ws://old-host:9999/tcp',
-      'TUNNEL_SERVER_URL must be the old value');
-    assert.equal(envVars['TUNNEL_USERNAME'], 'olduser',
-      'TUNNEL_USERNAME must be the old value');
-    assert.equal(envVars['TUNNEL_PASSWORD'], 'correct-password',
-      'TUNNEL_PASSWORD must be the old value');
+    assert.equal(envVars.TUNNEL_SERVER_URL, 'ws://old-host:9999/tcp', 'TUNNEL_SERVER_URL must be the old value');
+    assert.equal(envVars.TUNNEL_USERNAME, 'olduser', 'TUNNEL_USERNAME must be the old value');
+    assert.equal(envVars.TUNNEL_PASSWORD, 'correct-password', 'TUNNEL_PASSWORD must be the old value');
   } catch (err) {
     if (err.code === 'ENOENT') {
       t.skip('/proc not available, skipping environ assertions');
@@ -1007,7 +1260,7 @@ test('RS02 service: optional env present in old process is restored on rollback'
 
   // Fake previous environ: required + optional keys all present with old values
   const envFile = path.join(sandbox, 'fake-environ');
-  const environData = [
+  const environData = `${[
     'TUNNEL_SERVER_URL=ws://old-host:9999/tcp',
     'TUNNEL_USERNAME=olduser',
     'TUNNEL_PASSWORD=correct-password',
@@ -1021,11 +1274,11 @@ test('RS02 service: optional env present in old process is restored on rollback'
     'TCP_CONNECT_TIMEOUT_MS=8000',
     'VERBOSE=true',
     'LOG_FORMAT=json',
-  ].join('\0') + '\0';
+  ].join('\0')}\0`;
   fs.writeFileSync(envFile, environData);
 
   // Candidate changes optional fields + wrong password → fails → rollback
-  const install2 = await runScript(
+  const _install2 = await runScript(
     SCRIPT.service,
     serviceEnv(sandbox, server.port, {
       mockBin,
@@ -1050,39 +1303,30 @@ test('RS02 service: optional env present in old process is restored on rollback'
   try {
     const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
     const envVars = Object.fromEntries(
-      environ.split('\0').filter(Boolean).map((entry) => {
-        const idx = entry.indexOf('=');
-        return [entry.slice(0, idx), entry.slice(idx + 1)];
-      }),
+      environ
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf('=');
+          return [entry.slice(0, idx), entry.slice(idx + 1)];
+        }),
     );
 
     // Optional keys must be restored to OLD values
-    assert.equal(envVars['TARGET_ORIGIN'], 'http://127.0.0.1:8888',
-      'TARGET_ORIGIN must be restored to old value');
-    assert.equal(envVars['MAX_CONCURRENT_STREAMS'], '100',
-      'MAX_CONCURRENT_STREAMS must be restored to old value');
-    assert.equal(envVars['STREAM_IDLE_TIMEOUT_MS'], '90000',
-      'STREAM_IDLE_TIMEOUT_MS must be restored to old value');
-    assert.equal(envVars['WS_HIGH_WATER_BYTES'], '500000',
-      'WS_HIGH_WATER_BYTES must be restored to old value');
-    assert.equal(envVars['MAX_FRAME_PAYLOAD_BYTES'], '128000',
-      'MAX_FRAME_PAYLOAD_BYTES must be restored to old value');
-    assert.equal(envVars['LOCAL_REQUEST_TIMEOUT_MS'], '3000',
-      'LOCAL_REQUEST_TIMEOUT_MS must be restored to old value');
-    assert.equal(envVars['TCP_CONNECT_TIMEOUT_MS'], '8000',
-      'TCP_CONNECT_TIMEOUT_MS must be restored to old value');
-    assert.equal(envVars['VERBOSE'], 'true',
-      'VERBOSE must be restored to old value');
-    assert.equal(envVars['LOG_FORMAT'], 'json',
-      'LOG_FORMAT must be restored to old value');
+    assert.equal(envVars.TARGET_ORIGIN, 'http://127.0.0.1:8888', 'TARGET_ORIGIN must be restored to old value');
+    assert.equal(envVars.MAX_CONCURRENT_STREAMS, '100', 'MAX_CONCURRENT_STREAMS must be restored to old value');
+    assert.equal(envVars.STREAM_IDLE_TIMEOUT_MS, '90000', 'STREAM_IDLE_TIMEOUT_MS must be restored to old value');
+    assert.equal(envVars.WS_HIGH_WATER_BYTES, '500000', 'WS_HIGH_WATER_BYTES must be restored to old value');
+    assert.equal(envVars.MAX_FRAME_PAYLOAD_BYTES, '128000', 'MAX_FRAME_PAYLOAD_BYTES must be restored to old value');
+    assert.equal(envVars.LOCAL_REQUEST_TIMEOUT_MS, '3000', 'LOCAL_REQUEST_TIMEOUT_MS must be restored to old value');
+    assert.equal(envVars.TCP_CONNECT_TIMEOUT_MS, '8000', 'TCP_CONNECT_TIMEOUT_MS must be restored to old value');
+    assert.equal(envVars.VERBOSE, 'true', 'VERBOSE must be restored to old value');
+    assert.equal(envVars.LOG_FORMAT, 'json', 'LOG_FORMAT must be restored to old value');
 
     // Required keys must be present with old values
-    assert.equal(envVars['TUNNEL_SERVER_URL'], 'ws://old-host:9999/tcp',
-      'TUNNEL_SERVER_URL must be the old value');
-    assert.equal(envVars['TUNNEL_USERNAME'], 'olduser',
-      'TUNNEL_USERNAME must be the old value');
-    assert.equal(envVars['TUNNEL_PASSWORD'], 'correct-password',
-      'TUNNEL_PASSWORD must be the old value');
+    assert.equal(envVars.TUNNEL_SERVER_URL, 'ws://old-host:9999/tcp', 'TUNNEL_SERVER_URL must be the old value');
+    assert.equal(envVars.TUNNEL_USERNAME, 'olduser', 'TUNNEL_USERNAME must be the old value');
+    assert.equal(envVars.TUNNEL_PASSWORD, 'correct-password', 'TUNNEL_PASSWORD must be the old value');
   } catch (err) {
     if (err.code === 'ENOENT') {
       t.skip('/proc not available, skipping environ assertions');
@@ -1142,7 +1386,9 @@ test('INT-01 service: SIGTERM after old process stopped triggers rollback', asyn
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stderr = '';
-  child.stderr.on('data', (d) => { stderr += d; });
+  child.stderr.on('data', (d) => {
+    stderr += d;
+  });
 
   // Step 3: Wait for old process to stop and candidate to be activated
   await new Promise((resolve) => {
@@ -1176,8 +1422,7 @@ test('INT-01 service: SIGTERM after old process stopped triggers rollback', asyn
 
   // Previous release must be restored as current
   const currentLink = fs.readlinkSync(path.join(workDir, 'current'));
-  assert.equal(currentLink, release1,
-    `current must be restored to release 1; got ${currentLink}`);
+  assert.equal(currentLink, release1, `current must be restored to release 1; got ${currentLink}`);
 
   // Previous process must be running (with retry for timing)
   const pid2 = readTrim(path.join(workDir, 'client.pid'));
@@ -1188,12 +1433,10 @@ test('INT-01 service: SIGTERM after old process stopped triggers rollback', asyn
     if (isRunning(pid2)) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  assert.ok(isRunning(pid2),
-    `restored process must be running; pid2=${pid2}, stderr=${result.stderr?.slice(-300)}`);
+  assert.ok(isRunning(pid2), `restored process must be running; pid2=${pid2}, stderr=${result.stderr?.slice(-300)}`);
 
   // Ready file must be valid
-  assert.equal(readTrim(path.join(workDir, 'client.ready')), pid2,
-    'ready file must contain the restored PID');
+  assert.equal(readTrim(path.join(workDir, 'client.ready')), pid2, 'ready file must contain the restored PID');
 });
 
 // ---------------------------------------------------------------------------
@@ -1219,7 +1462,11 @@ test('INT-02 service: SIGTERM during staging leaves old process untouched', asyn
     delayServer.listen(0, '127.0.0.1', () => resolve(delayServer.address().port));
   });
   t.after(async () => {
-    for (const { res } of pendingRequests) { try { res.destroy(); } catch {} }
+    for (const { res } of pendingRequests) {
+      try {
+        res.destroy();
+      } catch {}
+    }
     await new Promise((r) => delayServer.close(r));
   });
   const server = await createArtifactServer(fixturesFor('client', READY_BUNDLE));
@@ -1270,10 +1517,8 @@ test('INT-02 service: SIGTERM during staging leaves old process untouched', asyn
   // Step 4: Assert old process untouched
   assert.notEqual(result.status, 0, 'installer must exit nonzero on interrupt');
   assert.ok(isRunning(pid1), 'old process must still be running');
-  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), release1,
-    'current symlink must be unchanged');
-  assert.equal(readTrim(path.join(workDir, 'client.pid')), pid1,
-    'pid file must be unchanged');
+  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), release1, 'current symlink must be unchanged');
+  assert.equal(readTrim(path.join(workDir, 'client.pid')), pid1, 'pid file must be unchanged');
 });
 
 // ---------------------------------------------------------------------------
@@ -1343,8 +1588,7 @@ test('INT-03 agent: SIGTERM after old process stopped triggers rollback', async 
 
   // Step 5: Assert rollback
   assert.notEqual(result.status, 0, 'installer must exit nonzero on interrupt');
-  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), release1,
-    'current must be restored to release 1');
+  assert.equal(fs.readlinkSync(path.join(workDir, 'current')), release1, 'current must be restored to release 1');
   const pid2 = readTrim(path.join(workDir, 'agent.pid'));
   assert.ok(pid2, 'PID file must exist after rollback');
   assert.ok(isRunning(pid2), 'restored process must be running');
@@ -1405,7 +1649,9 @@ test('INT-04 service: A→B→C SIGTERM restores B and B process', async (t) => 
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stderr = '';
-  child.stderr.on('data', (d) => { stderr += d; });
+  child.stderr.on('data', (d) => {
+    stderr += d;
+  });
 
   // Step 4: Wait for B to stop (candidate C activated)
   await new Promise((resolve) => {
@@ -1461,16 +1707,13 @@ test('INT-04 service: A→B→C SIGTERM restores B and B process', async (t) => 
   assert.equal(isRunning(candidatePidC), false, 'candidate C must not survive interrupted rollback');
 
   // Ready file must match PID
-  assert.equal(readTrim(path.join(workDir, 'client.ready')), pidC,
-    'ready PID must match running PID');
+  assert.equal(readTrim(path.join(workDir, 'client.ready')), pidC, 'ready PID must match running PID');
 
   // P1-2: Process executable path must belong to B, not A or C
   try {
     const cmdline = fs.readFileSync(`/proc/${pidC}/cmdline`, 'utf8');
-    assert.ok(cmdline.includes(releaseB),
-      `process path must belong to B (${releaseB}); got ${cmdline}`);
-    assert.ok(!cmdline.includes(releaseA),
-      `process path must NOT belong to A (${releaseA}); got ${cmdline}`);
+    assert.ok(cmdline.includes(releaseB), `process path must belong to B (${releaseB}); got ${cmdline}`);
+    assert.ok(!cmdline.includes(releaseA), `process path must NOT belong to A (${releaseA}); got ${cmdline}`);
   } catch {
     t.skip('/proc not available, skipping cmdline assertion');
   }
@@ -1531,7 +1774,9 @@ test('INT-05 agent: A→B→C SIGTERM restores B and B process', async (t) => {
     stdio: ['pipe', 'pipe', 'pipe'],
   });
   let stderr = '';
-  child.stderr.on('data', (d) => { stderr += d; });
+  child.stderr.on('data', (d) => {
+    stderr += d;
+  });
 
   // Step 4: Wait for B to stop
   await new Promise((resolve) => {
@@ -1583,16 +1828,104 @@ test('INT-05 agent: A→B→C SIGTERM restores B and B process', async (t) => {
   assert.ok(candidatePidC !== pidC, 'candidate PID must differ from rollback PID');
   assert.equal(isRunning(candidatePidC), false, 'candidate C must not survive interrupted rollback');
 
-  assert.equal(readTrim(path.join(workDir, 'agent.ready')), pidC,
-    'ready PID must match running PID');
+  assert.equal(readTrim(path.join(workDir, 'agent.ready')), pidC, 'ready PID must match running PID');
 
   try {
     const cmdline = fs.readFileSync(`/proc/${pidC}/cmdline`, 'utf8');
-    assert.ok(cmdline.includes(releaseB),
-      `process path must belong to B (${releaseB}); got ${cmdline}`);
-    assert.ok(!cmdline.includes(releaseA),
-      `process path must NOT belong to A (${releaseA}); got ${cmdline}`);
+    assert.ok(cmdline.includes(releaseB), `process path must belong to B (${releaseB}); got ${cmdline}`);
+    assert.ok(!cmdline.includes(releaseA), `process path must NOT belong to A (${releaseA}); got ${cmdline}`);
   } catch {
     t.skip('/proc not available, skipping cmdline assertion');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// RA01 — optional env absent in old process remains absent after rollback
+// ---------------------------------------------------------------------------
+
+test('RA01 agent: optional env absent in old process remains absent after rollback', async (t) => {
+  const sandbox = fs.mkdtempSync('/tmp/ra01-absent-');
+  const mockBin = createMockBin(sandbox, path.join(sandbox, 'npm-calls.txt'));
+  const server = await createArtifactServer(fixturesFor('tcp-agent', CREDENTIAL_AGENT_BUNDLE));
+  const workDir = path.join(sandbox, '.tcp-agent');
+  t.after(async () => {
+    killPidFile(path.join(workDir, 'agent.pid'));
+    await server.close();
+    fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  // Install with correct password — succeeds
+  const install1 = await runScript(
+    SCRIPT.agent,
+    agentEnv(sandbox, server.port, { mockBin, AGENT_PASSWORD: 'correct-password' }),
+  );
+  assert.equal(install1.status, 0, `install1 stderr:\n${install1.stderr}`);
+  const pid1 = readTrim(path.join(workDir, 'agent.pid'));
+  assert.ok(isRunning(pid1), 'first install must be running');
+
+  // Fake previous environ: required keys present, optional keys ABSENT
+  const envFile = path.join(sandbox, 'fake-environ');
+  const environData = `${[
+    'TUNNEL_SERVER_URL=ws://old-host:9999/tcp',
+    'AGENT_USERNAME=olduser',
+    'AGENT_PASSWORD=correct-password',
+    'AGENT_PORTS=6379',
+    'AGENT_BIND_HOST=127.0.0.1',
+  ].join('\0')}\0`;
+  fs.writeFileSync(envFile, environData);
+
+  // Install with wrong password — candidate fails, triggers rollback
+  const _install2 = await runScript(
+    SCRIPT.agent,
+    agentEnv(sandbox, server.port, {
+      mockBin,
+      PREVIOUS_ENVIRON_SOURCE: envFile,
+      AGENT_PASSWORD: 'wrong-password',
+      WS_HIGH_WATER_BYTES: '2000000',
+      AGENT_RECONNECT_DELAY_MS: '5000',
+    }),
+  );
+
+  // Rollback should succeed (old password is correct)
+  // The installer may exit 0 (rollback succeeded) or we check the process
+  const pid2 = readTrim(path.join(workDir, 'agent.pid'));
+  assert.ok(pid2, 'PID file must exist after rollback');
+  assert.ok(isRunning(pid2), 'rollback process must be running');
+
+  // Read rollback process environment from /proc
+  try {
+    const environ = fs.readFileSync(`/proc/${pid2}/environ`, 'utf8');
+    const envVars = Object.fromEntries(
+      environ
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => {
+          const idx = entry.indexOf('=');
+          return [entry.slice(0, idx), entry.slice(idx + 1)];
+        }),
+    );
+
+    // Optional keys must NOT be present in rollback process env
+    assert.equal(
+      envVars.WS_HIGH_WATER_BYTES,
+      undefined,
+      'WS_HIGH_WATER_BYTES must be absent from rollback process env',
+    );
+    assert.equal(
+      envVars.AGENT_RECONNECT_DELAY_MS,
+      undefined,
+      'AGENT_RECONNECT_DELAY_MS must be absent from rollback process env',
+    );
+
+    // Required keys must be present
+    assert.equal(envVars.TUNNEL_SERVER_URL, 'ws://old-host:9999/tcp', 'TUNNEL_SERVER_URL must be the old value');
+    assert.equal(envVars.AGENT_PASSWORD, 'correct-password', 'AGENT_PASSWORD must be the old value');
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      // /proc may not be available (non-Linux) — skip env assertions
+      t.skip('/proc not available, skipping environ assertions');
+    } else {
+      throw err;
+    }
   }
 });

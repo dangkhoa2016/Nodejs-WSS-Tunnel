@@ -111,10 +111,25 @@ Both installers use the same transactional model:
 - **Atomic activation.** `current` is a symlink to the active release;
   `previous` points at the last known-good release used for rollback.
 - **Readiness gate.** After activation the script waits for the
-  `client.ready` / `agent.ready` file to contain the new PID. If the process
-  exits, times out, or logs an `auth_failed` (wrong credentials), the script
-  kills the candidate, reactivates `previous`, verifies it, and exits
-  **nonzero** so an automation tool knows the new release did not land.
+  `client.ready` / `agent.ready` file to contain the new PID. `agent.ready` is
+  only written after the agent has **bound every `AGENT_PORTS` listener and
+  opened its WebSocket to the server**, so a failure to bind a port is never
+  reported as a successful install; it is invalidated (removed) whenever a
+  listener fails to bind or closes unexpectedly or the WebSocket drops.
+  `client.ready` is written once the client's authenticated WebSocket to
+  `/tunnel` is open (the client binds no listeners) and is removed on
+  disconnect, authentication failure, or shutdown. Ready files are written
+  atomically (temp + rename) so a poller never reads partial content. If the
+  process exits, times out, or logs an `auth_failed` (wrong credentials), the
+  script kills the candidate, reactivates `previous` and re-verifies it,
+  restoring the previous runtime configuration (credentials, ports, and service
+  settings captured from the running process before it was stopped), then exits
+  **nonzero** so an automation tool knows the new release did not land. If the
+  previous runtime configuration cannot be captured (the old process is gone or
+  its environment is unreadable), the script refuses to stop the running
+  process unless `ALLOW_CODE_ONLY_ROLLBACK=1` is set, in which case it rolls
+  back using the previous code with the current installer's runtime
+  configuration (does not restore the previous process environment).
 - **Old process safety.** A stale `client.pid`/`agent.pid` is only ever killed
   when it matches the expected process. An unrelated process is left alone and
   the install aborts.
@@ -124,6 +139,10 @@ Both installers use the same transactional model:
 - **Logs.** Live output goes to `client.log`/`agent.log`; older logs rotate
   into `logs/`. A failed candidate keeps a `client.failed.*.log` (or
   `agent.failed.*.log`) for diagnostics.
+- **Retention.** After a successful install the script prunes old releases
+  (keeping `INSTALL_RELEASES_KEEP`, default 3) and rotated logs (keeping
+  `SETUP_LOG_KEEP`, default 5). Both knobs must be integers with sane minimums,
+  and pruning works even when the work directory contains spaces.
 - **Concurrency guard.** A lock file makes a second concurrent installer exit
   immediately with `Another installation is already running`.
 - **Legacy migration.** A pre-transactional install (bundle in the work

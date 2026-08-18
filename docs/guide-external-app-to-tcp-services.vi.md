@@ -14,8 +14,9 @@ máy dịch vụ (Computer A) cho một hoặc nhiều máy ứng dụng (B, C, 
 | Phù hợp | VPS/mạng tự quản lý | PaaS và nhiều máy từ xa |
 | Truyền tải bên ngoài | TCP thô | TCP local, sau đó WSS |
 
-Chế độ trực tiếp đơn giản khi server có thể expose và firewall đúng cổng dịch
-vụ. Agent phù hợp với PaaS và cung cấp listener `127.0.0.1` riêng cho từng B/C.
+Chế độ trực tiếp đơn giản hơn khi server có thể mở và firewall đúng cổng
+dịch vụ. Chế độ agent an toàn hơn cho PaaS và cho phép từng host B/C nhận
+các listener `127.0.0.1` riêng thông qua cổng WebSocket có sẵn của server.
 
 ## Kiến trúc
 
@@ -59,8 +60,8 @@ npm run prod
 
 ## 2. Cài Computer A (máy dịch vụ)
 
-Không cần checkout mã nguồn. Chỉ tải script từ release tag bất biến và đáng tin
-cậy (hoặc nhận đúng file này từ quản trị viên):
+Không cần checkout mã nguồn. Chỉ tải script từ release tag bất biến và
+đáng tin cậy (hoặc nhận đúng file này từ quản trị viên):
 
 ```bash
 curl -fsSL 'https://raw.githubusercontent.com/dangkhoa2016/Nodejs-WSS-Tunnel/<release-tag>/scripts/setup-service-host.sh' -o setup-service-host.sh
@@ -73,8 +74,8 @@ export TUNNEL_PASSWORD='<tunnel-secret-dai>'
 ./setup-service-host.sh
 ```
 
-Giữ Redis và PostgreSQL trên loopback. Thay `<release-tag>` bằng phiên bản bất
-biến đã duyệt; không cài script production từ nhánh `main` luôn thay đổi.
+Giữ Redis và PostgreSQL trên loopback. Thay `<release-tag>` bằng phiên bản
+bất biến đã duyệt; không cài script production từ nhánh `main` luôn thay đổi.
 
 ## 3. Cài Computer B (máy ứng dụng)
 
@@ -103,30 +104,46 @@ Cả hai installer dùng chung mô hình transactional:
 
 - **Staging trước khi đổi phiên bản.** Script tải bundle và manifest
   `*-package.json` đã ghim, kiểm tra bundle, rồi cài dependencies
-  (`npm install --omit=dev`) vào thư mục riêng
-  `~/.tunnel-client/releases/release.<random>` (hoặc `~/.tcp-agent/releases/...`).
-  Tiến trình đang chạy chỉ bị dừng sau khi bản mới đã staged hoàn tất.
+  (`npm install --omit=dev`) vào một thư mục riêng
+  `~/.tunnel-client/releases/release.<random>` (hoặc
+  `~/.tcp-agent/releases/...`). Tiến trình đang chạy chỉ bị dừng sau khi
+  bản mới đã staged hoàn tất.
 - **Activate nguyên tử.** `current` là symlink trỏ tới release đang hoạt động;
   `previous` trỏ tới bản known-good cuối cùng dùng để rollback.
 - **Cổng readiness.** Sau khi activate, script đợi file `client.ready` /
   `agent.ready` chứa PID mới. `agent.ready` chỉ được ghi sau khi agent **bind
   mọi listener của `AGENT_PORTS` và mở WebSocket tới máy chủ**, nên việc bind
-  port thất bại không bao giờ được báo là cài thành công. `client.ready` được
-  ghi khi WebSocket đã xác thực tới `/tunnel` mở (client không bind listener
-  nào) và bị xóa khi ngắt kết nối hoặc dừng. Nếu tiến trình thoát, hết thời
-  gian, hoặc log `auth_failed` (sai credential), script giết candidate, kích
-  hoạt lại `previous` và xác minh lại, khôi phục cấu hình thời gian chạy trước
-  (thông tin đăng nhập, cổng và cài đặt dịch vụ được lưu từ tiến trình đang
-  chạy trước khi dừng), rồi thoát **nonzero** để tool tự động biết bản mới
-  chưa được áp dụng.
+  port thất bại không bao giờ được báo là cài thành công; file bị vô hiệu hóa
+  (xóa) khi một listener không bind được hoặc đóng ngoài dự kiến, hoặc khi
+  WebSocket bị rớt.
+  `client.ready` được ghi khi WebSocket đã xác thực tới `/tunnel` mở (client
+  không bind listener nào) và bị xóa khi ngắt kết nối, xác thực thất bại,
+  hoặc dừng.
+  File ready được ghi nguyên tử (temp + rename) nên poller không bao giờ đọc
+  phải nội dung dở dang. Nếu tiến trình thoát, hết thời gian, hoặc log
+  `auth_failed` (sai credential), script giết candidate, kích hoạt lại
+  `previous` và xác minh lại, khôi phục cấu hình thời gian chạy trước
+  (thông tin đăng nhập, cổng và cài đặt dịch vụ được lưu từ tiến trình
+  đang chạy trước khi dừng), rồi thoát **nonzero** để tool tự động biết
+  bản mới chưa được áp dụng. Nếu không lấy được cấu hình thời gian chạy
+  cũ (tiến trình cũ không còn chạy hoặc không đọc được environment),
+  script từ chối dừng tiến trình đang chạy trừ khi đặt
+  `ALLOW_CODE_ONLY_ROLLBACK=1`, lúc đó nó rollback bằng code trước đó với
+  cấu hình runtime hiện tại của installer (không khôi phục environment của
+  process trước đó).
 - **An toàn tiến trình cũ.** `client.pid`/`agent.pid` cũ chỉ bị kill khi khớp
   đúng tiến trình dự kiến. Tiến trình không liên quan được giữ nguyên và cài
   đặt dừng lại.
-- **Chạy lại để nâng cấp.** Chạy lại script với cùng `INSTALL_UUID` sẽ nâng
-  cấp tại chỗ. Khi manifest đổi, dependencies được cài mới cho release đó.
+- **Chạy lại để nâng cấp.** Chạy lại script với cùng `INSTALL_UUID` sẽ
+  nâng cấp tại chỗ. Khi manifest đổi, dependencies được cài mới cho
+  release đó.
 - **Logs.** Output hiện tại vào `client.log`/`agent.log`; log cũ được xoay vào
   `logs/`. Candidate lỗi giữ lại `client.failed.*.log` (hoặc
   `agent.failed.*.log`) để chẩn đoán.
+- **Giữ lại (retention).** Sau khi cài thành công, script dọn các release cũ
+  (giữ `INSTALL_RELEASES_KEEP`, mặc định 3) và log đã xoay (giữ
+  `SETUP_LOG_KEEP`, mặc định 5). Cả hai tham số phải là số nguyên với mức
+  tối thiểu hợp lý, và việc dọn vẫn hoạt động khi thư mục chứa dấu cách.
 - **Khoá chống chạy song song.** File lock khiến installer thứ hai thoát ngay
   với `Another installation is already running`.
 - **Migrate legacy.** Bản cài trước transactional (bundle nằm ở gốc thư mục

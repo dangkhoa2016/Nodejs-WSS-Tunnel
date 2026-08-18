@@ -71,8 +71,8 @@ Dùng chế độ trực tiếp khi server có thể bind và firewall cổng d�
 
 ## 2. Điều kiện tiên quyết
 
-- Máy chủ nodejs có thể chạy `yarn dev` / `yarn prod` (Node.js >= 18).
-- Máy chạy Redis (tunnel client) có **Node.js >= 18**, `curl`, và có **Redis đang chạy**.
+- Máy chủ nodejs có thể chạy `yarn dev` / `yarn prod` (Node.js >= 20).
+- Máy chạy Redis (tunnel client) có **Node.js >= 20**, `curl`, và có **Redis đang chạy**.
 - App bên ngoài (Rails) có đường truyền TCP tới máy chủ nodejs.
 
 ---
@@ -193,7 +193,7 @@ curl -fsSL https://your-server.example.com/<install-uuid>-install | bash
 
 - Tải bundle `client.js` từ `https://<server>/<INSTALL_UUID>-client.js`, kiểm tra bằng `node --check`, rồi kích hoạt nguyên tử (symlink `~/.tunnel-client/current`).
 - Tạo file `.env` trong release dir với `TUNNEL_SERVER_URL`, `TUNNEL_USERNAME`, `TUNNEL_PASSWORD`, `TARGET_ORIGIN`.
-- Chạy client nền và chờ file `client.ready` (chứa PID) làm tín hiệu sẵn sàng. Nếu thất bại sẽ rollback về bản trước.
+- Chạy client nền và chờ file `client.ready` (chứa PID) làm tín hiệu sẵn sàng. File ready được ghi nguyên tử (temp + rename) chỉ sau khi client đã mở kết nối WebSocket được xác thực tới endpoint `/tunnel` của máy chủ. File bị xóa khi client ngắt kết nối, xác thực thất bại, hoặc dừng và được ghi lại khi kết nối lại, nên nó luôn phản ánh kết nối thực tế của tiến trình hiện tại. Khi kiểm tra sẵn sàng thất bại, bản phát hành mới bị dừng và bản trước được kích hoạt lại cùng cấu hình thời gian chạy cũ (thông tin đăng nhập và cài đặt dịch vụ được lưu từ tiến trình đang chạy trước khi dừng) rồi xác minh lại; nếu không lấy được cấu hình thời gian chạy cũ, installer từ chối dừng client đang chạy trừ khi đặt `ALLOW_CODE_ONLY_ROLLBACK=1`, lúc đó nó rollback bằng code trước đó với cấu hình runtime hiện tại của installer (không khôi phục environment của process trước đó). Log của bản thất bại được giữ lại trong `~/.tunnel-client/logs/`.
 
 Quản lý client:
 
@@ -230,7 +230,7 @@ Rails ── localhost:6379 ──> tcp-agent.js ── WS /tcp ──> Server :
 ### 5.1 Khi nào dùng
 
 - Server nằm trên PaaS/hosting (Render, Railway, Fly.io...) chỉ expose một cổng public, nên server không bind `TCP_TUNNEL_PORTS` được.
-- Máy app chạy được một tiến trình Node.js nhỏ (Node.js >= 18) và có `curl` cùng `npm` (hoặc `yarn`/`pnpm`).
+- Máy app chạy được một tiến trình Node.js nhỏ (Node.js >= 20) và có `curl` cùng `npm` (hoặc `yarn`/`pnpm`).
 - Dịch vụ local bind `127.0.0.1` trên máy app.
 
 ### 5.2 Cài agent trên máy app

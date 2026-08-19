@@ -120,7 +120,8 @@
 │       ├── utils.js         # HMAC, SafeEqual, Sanitize Headers
 │       ├── ipAllowlist.js   # IPv4/CIDR matcher
 │       ├── logging.js       # Logging core implementation
-│       └── logger.js        # Logging facade (text / JSON, verbose)
+│       ├── logger.js        # Logging facade (text / JSON, verbose)
+│       └── runtime-config.js # readInteger/readBoolean for standalone agents
 ├── public/                 # Tài nguyên trang đích (landing page)
 ├── test/                    # Test suite (built-in node:test runner)
 │   ├── server/              # Core server tests
@@ -197,7 +198,7 @@
 ## Hướng dẫn cài đặt máy chủ
 
 ### Yêu cầu
-- **Node.js**: >= 18.0.0
+- **Node.js**: >= 20.0.0
 - **Trình quản lý gói**: Yarn (khuyến nghị) hoặc npm
 
 ### Bắt đầu nhanh
@@ -310,9 +311,9 @@ Client (ví dụ: trên Google Colab hoặc máy cục bộ) kết nối đến 
 
 > Mặc định máy chủ chỉ chấp nhận **một** tunnel client tại một thời điểm; đặt `MAX_TUNNEL_CLIENTS` để cho phép nhiều hơn. Client vượt quá giới hạn bị từ chối với mã đóng `1013`.
 
-**Yêu cầu trên máy client:** `curl`, `node` (>= 18), `npm`, `mv` hỗ trợ GNU `-T`
+**Yêu cầu trên máy client:** `curl`, `node` (>= 20), `npm`, `mv` hỗ trợ GNU `-T`
 
-Các script cài đặt nhiều máy (`setup-service-host.sh`, `setup-application-host.sh`) hướng tới **Linux với GNU coreutils/findutils** (`find -printf`, `sort -z`, `cut -z`). Trên macOS, hãy cài GNU tools (`brew install coreutils findutils`, rồi `alias mv=gmv`; `gfind`/`gsort`/`gcut` phải đứng trước các bản BSD trên `PATH`) hoặc cài đặt thủ công.
+Các script cài đặt nhiều máy (`setup-service-host.sh`, `setup-application-host.sh`) hướng tới **Linux với GNU coreutils/findutils** (`find -printf`, `sort -z`, `cut -z`). Trên macOS, hãy cài GNU tools (`brew install coreutils findutils`, rồi `alias mv=gmv`; `gfind`/`gsort`/`gcut` phải đứng trước các bản BSD trên `PATH`) hoặc cài đặt thủ công.  Rollback đầy đủ (khôi phục cấu hình runtime từ process trước đó) yêu cầu Linux `/proc/$pid/environ`; trên nền tảng không phải Linux, đặt `ALLOW_CODE_ONLY_ROLLBACK=1` để rollback bằng code trước đó với cấu hình runtime hiện tại của installer (không khôi phục environment của process trước đó).
 
 > Trên macOS: cài coreutils (`brew install coreutils`) để có `gmv -T`, sau đó `alias mv=gmv`.
 
@@ -330,13 +331,13 @@ TARGET_ORIGIN=http://127.0.0.1:8000 \
 curl -fsSL https://your-server-host/<uuid>-install | bash
 ```
 
-Các artifact được tải về một thư mục phát hành (release) bất biến duy nhất và được xác thực trước khi client đang chạy bị dừng. Việc xác thực thất bại sẽ xóa bản phát hành mới và giữ nguyên client hiện tại. Nếu một bản phát hành đã xác thực không vượt qua kiểm tra sẵn sàng (readiness) sau khi kích hoạt, trình cài đặt sẽ kích hoạt lại và xác minh bản phát hành trước đó.
+Các artifact được tải về một thư mục phát hành (release) bất biến duy nhất và được xác thực trước khi client đang chạy bị dừng. Việc xác thực thất bại sẽ xóa bản phát hành mới và giữ nguyên client hiện tại. Sau khi kích hoạt, trình cài đặt chờ file sẵn sàng của client trước khi coi việc chuyển sang bản mới là hoàn tất. Nếu một bản phát hành đã xác thực không vượt qua kiểm tra sẵn sàng (readiness), nó sẽ bị dừng và bản phát hành trước đó được kích hoạt lại cùng cấu hình thời gian chạy cũ (thông tin đăng nhập, cổng và cài đặt dịch vụ được lưu trong bộ nhớ từ tiến trình đang chạy trước khi dừng), rồi được xác minh lại; nhờ vậy việc đổi sai mật khẩu hoặc cổng không làm hỏng việc rollback. Nếu không lấy được cấu hình thời gian chạy cũ (ví dụ tiến trình cũ không còn chạy hoặc không đọc được environment), trình cài đặt từ chối dừng tiến trình đang chạy trừ khi đặt `ALLOW_CODE_ONLY_ROLLBACK=1`, lúc đó nó rollback bằng code trước đó với cấu hình runtime hiện tại của installer (không khôi phục environment của process trước đó). Log của bản thất bại được giữ lại trong `~/.tunnel-client/logs/` để chẩn đoán. Nếu không thể khôi phục bản phát hành trước đó, trình cài đặt thoát với mã lỗi khác 0 và giữ nguyên bản thất bại để kiểm tra.
 
 ### 3. Quản lý tiến trình Client
 - **Xem log Client**: `tail -f ~/.tunnel-client/client.log`
 - **Xóa log Client**: `> ~/.tunnel-client/client.log`
 - **Dừng Client**: `kill $(cat ~/.tunnel-client/client.pid)` (trình cài đặt xác minh PID khớp với bundle client trước khi kill; khi dùng tay hãy kiểm tra PID thuộc về `client.js`)
-- **Trạng thái sẵn sàng của Client**: File `client.ready` trong `~/.tunnel-client/` chứa PID của client và xác nhận client đã vượt qua kiểm tra sẵn sàng khi khởi động.
+- **Trạng thái sẵn sàng của Client**: File `client.ready` trong `~/.tunnel-client/` chứa PID của client và chỉ được ghi sau khi client đã mở kết nối WebSocket được xác thực tới endpoint `/tunnel` của máy chủ, và được ghi nguyên tử (temp + rename) nên reader không bao giờ đọc phải nội dung dở dang. File bị xóa khi client ngắt kết nối, xác thực thất bại, hoặc dừng và được ghi lại khi client kết nối lại, nên một file ready cũ không bao giờ báo một tiến trình đã chết hoặc đã ngắt kết nối là khỏe mạnh.
 
 ---
 

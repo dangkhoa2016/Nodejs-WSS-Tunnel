@@ -120,7 +120,8 @@ HTTP-over-WebSocket reverse tunnel with TCP tunneling support (direct + TCP agen
 │       ├── utils.js         # HMAC, SafeEqual, Sanitize Headers
 │       ├── ipAllowlist.js   # IPv4/CIDR matcher
 │       ├── logging.js       # Logging core implementation
-│       └── logger.js        # Logging facade (text / JSON, verbose)
+│       ├── logger.js        # Logging facade (text / JSON, verbose)
+│       └── runtime-config.js # readInteger/readBoolean for standalone agents
 ├── public/                 # Landing page assets
 ├── test/                    # Test suite (built-in node:test runner)
 │   ├── server/              # Core server tests
@@ -197,7 +198,7 @@ For more detail, see the guides under `docs/`:
 ## Server Setup Guide
 
 ### Requirements
-- **Node.js**: >= 18.0.0
+- **Node.js**: >= 20.0.0
 - **Package Manager**: Yarn (recommended) or npm
 
 ### Quick Start
@@ -310,9 +311,9 @@ The Client (e.g., on Google Colab or local machine) connects to the Server via t
 
 > By default the server accepts **one** tunnel client at a time; set `MAX_TUNNEL_CLIENTS` to allow more. Clients beyond the limit are rejected with close code `1013`.
 
-**Requirements on the client machine:** `curl`, `node` (>= 18), `npm`, `mv` with GNU `-T` support
+**Requirements on the client machine:** `curl`, `node` (>= 20), `npm`, `mv` with GNU `-T` support
 
-The multi-host setup scripts (`setup-service-host.sh`, `setup-application-host.sh`) target **Linux with GNU coreutils/findutils** (`find -printf`, `sort -z`, `cut -z`). On macOS, install GNU tools (`brew install coreutils findutils`, then `alias mv=gmv`; `gfind`/`gsort`/`gcut` must precede the BSD variants on `PATH`) or run the manual install.
+The multi-host setup scripts (`setup-service-host.sh`, `setup-application-host.sh`) target **Linux with GNU coreutils/findutils** (`find -printf`, `sort -z`, `cut -z`). On macOS, install GNU tools (`brew install coreutils findutils`, then `alias mv=gmv`; `gfind`/`gsort`/`gcut` must precede the BSD variants on `PATH`) or run the manual install.  Full rollback (restoring runtime configuration from the previous process) requires Linux `/proc/$pid/environ`; on non-Linux platforms, set `ALLOW_CODE_ONLY_ROLLBACK=1` to roll back using the previous code with the current installer's runtime configuration (does not restore the previous process environment).
 
 > On macOS: install coreutils (`brew install coreutils`) for `gmv -T`, then `alias mv=gmv`.
 
@@ -330,13 +331,13 @@ TARGET_ORIGIN=http://127.0.0.1:8000 \
 curl -fsSL https://your-server-host/<uuid>-install | bash
 ```
 
-Artifacts are downloaded into a unique immutable release directory and validated before the running client is stopped. A validation failure removes the new release and leaves the current client untouched. If a validated release fails readiness after activation, the installer reactivates and verifies the previous release.
+Artifacts are downloaded into a unique immutable release directory and validated before the running client is stopped. A validation failure removes the new release and leaves the current client untouched. After activation the installer waits for the client's readiness file before the upgrade is considered complete. A validated release that fails readiness is killed and the previous release is reactivated and re-verified; the rollback restores both the previous code and its previous runtime configuration (credentials, ports, and service settings captured from the running process before it was stopped), so a bad credential or port change cannot break the rollback. If the previous runtime configuration cannot be captured (for example because the old process is no longer running or its environment is unreadable), the installer refuses to stop the running process unless `ALLOW_CODE_ONLY_ROLLBACK=1` is set, in which case it rolls back using the previous code with the current installer's runtime configuration (it does not restore the previous process environment). The failed release's log is preserved under `~/.tunnel-client/logs/` for diagnostics. If the previous release cannot be restored, the install exits nonzero and leaves the failed release for inspection.
 
 ### 3. Client Process Management
 - **View Client Logs**: `tail -f ~/.tunnel-client/client.log`
 - **Clear Client Logs**: `> ~/.tunnel-client/client.log`
 - **Stop Client**: `kill $(cat ~/.tunnel-client/client.pid)` (the installer verifies the PID matches the client bundle before killing; on manual use confirm the PID belongs to `client.js`)
-- **Client Readiness**: The file `client.ready` in `~/.tunnel-client/` contains the client PID and confirms the client passed its startup readiness check.
+- **Client Readiness**: The file `client.ready` in `~/.tunnel-client/` contains the client PID and is written only after the client has opened an authenticated WebSocket connection to the server's `/tunnel` endpoint, and is written atomically (temp + rename) so a reader never sees partial content. The file is removed when the client disconnects, fails authentication, or stops and is recreated on reconnect, so a stale ready file never reports a dead or disconnected process as healthy.
 
 ---
 

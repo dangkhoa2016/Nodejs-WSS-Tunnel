@@ -71,8 +71,8 @@ This is a **reverse** tunnel:
 
 ## 2. Prerequisites
 
-- The Node.js server can run `yarn dev` / `yarn prod` (Node.js >= 18).
-- The machine running Redis (tunnel client) has **Node.js >= 18**, `curl`, and **Redis running**.
+- The Node.js server can run `yarn dev` / `yarn prod` (Node.js >= 20).
+- The machine running Redis (tunnel client) has **Node.js >= 20**, `curl`, and **Redis running**.
 - The external app (Rails) has TCP connectivity to the Node.js server.
 
 ---
@@ -193,7 +193,7 @@ curl -fsSL https://your-server.example.com/<install-uuid>-install | bash
 
 - Downloads the `client.js` bundle from `https://<server>/<INSTALL_UUID>-client.js`, validates it with `node --check`, then activates it atomically (symlink `~/.tunnel-client/current`).
 - Creates a `.env` file in the release directory with `TUNNEL_SERVER_URL`, `TUNNEL_USERNAME`, `TUNNEL_PASSWORD`, `TARGET_ORIGIN`.
-- Starts the client in the background and waits for the `client.ready` file (containing the PID) as a readiness signal. Rolls back to the previous release on failure.
+- Starts the client in the background and waits for the `client.ready` file (containing the PID) as a readiness signal. The ready file is written atomically (temp + rename) only after the client has opened an authenticated WebSocket connection to the server's `/tunnel` endpoint. The file is removed when the client disconnects, fails authentication, or stops and is recreated on reconnect, so it always reflects the current process's live connection. On a readiness failure the new release is stopped and the previous release is reactivated with its previous runtime configuration (credentials and service settings captured from the running process before it was stopped) and re-verified; if the previous runtime configuration cannot be captured, the installer refuses to stop the running client unless `ALLOW_CODE_ONLY_ROLLBACK=1` is set, in which case it rolls back using the previous code with the current installer's runtime configuration (it does not restore the previous process environment). The failed release's log is preserved under `~/.tunnel-client/logs/`.
 
 Managing the client:
 
@@ -230,7 +230,7 @@ Rails ── localhost:6379 ──> tcp-agent.js ── WS /tcp ──> Server :
 ### 5.1 When to use
 
 - The server is on a PaaS/hosting platform (Render, Railway, Fly.io...) that exposes only one public port, so the server cannot bind `TCP_TUNNEL_PORTS`.
-- The app host can run a small Node.js process (Node.js >= 18) and has `curl` plus `npm` (or `yarn`/`pnpm`).
+- The app host can run a small Node.js process (Node.js >= 20) and has `curl` plus `npm` (or `yarn`/`pnpm`).
 - The local service binds `127.0.0.1` on the app host.
 
 ### 5.2 Install the agent on the app host

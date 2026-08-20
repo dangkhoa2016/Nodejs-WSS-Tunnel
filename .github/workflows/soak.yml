@@ -32,7 +32,7 @@ jobs:
           SOAK_RESOURCE_LOG: /tmp/soak-resources.jsonl
       - name: Upload soak log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: soak-log
           path: |
